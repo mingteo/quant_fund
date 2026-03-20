@@ -3,7 +3,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 // Inisialisasi Yahoo Finance V3
 const YahooFinance = require("yahoo-finance2").default;
-const yahooFinance = new YahooFinance();
+const yahooFinance = new YahooFinance({ suppressNotices: ["ripHistorical"] });
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -11,15 +11,16 @@ const supabase = createClient(
 );
 
 async function fetchMacroData() {
-  console.log("🌍 MEMULAI PENARIKAN DATA MAKRO GLOBAL...");
+  console.log("🌍 MEMULAI PENARIKAN DATA MAKRO GLOBAL & DENOMINATOR...");
 
-  // Simbol di Yahoo Finance: DX-Y.NYB (Indeks Dolar AS), ^GSPC (S&P 500)
+  // Mendaftarkan Simbol Baru di Yahoo Finance
   const macroAssets = [
-    { symbol: "DXY", yfSymbol: "DX-Y.NYB" },
-    { symbol: "SPX", yfSymbol: "^GSPC" },
+    { symbol: "DXY", yfSymbol: "DX-Y.NYB" }, // Indeks Dolar AS
+    { symbol: "SPX", yfSymbol: "^GSPC" }, // S&P 500
+    { symbol: "GOLDUSD", yfSymbol: "GC=F" }, // Gold Futures
+    { symbol: "EURUSD", yfSymbol: "EURUSD=X" }, // Euro/USD
   ];
 
-  // Set tanggal mulai (3 tahun lalu) dan tanggal akhir (hari ini)
   const period2 = new Date(); // Hari ini
   const period1 = new Date();
   period1.setFullYear(period2.getFullYear() - 3); // Mundur 3 tahun
@@ -27,7 +28,7 @@ async function fetchMacroData() {
   try {
     for (const asset of macroAssets) {
       console.log(
-        `\nMenarik data historis untuk ${asset.symbol} dari Yahoo Finance...`,
+        `\nMenarik data historis untuk ${asset.symbol} (${asset.yfSymbol})...`,
       );
 
       const queryOptions = {
@@ -35,16 +36,18 @@ async function fetchMacroData() {
         period2: period2,
         interval: "1d",
       };
-
-      // Menggunakan fungsi .chart() sesuai aturan baru Yahoo Finance
       const result = await yahooFinance.chart(asset.yfSymbol, queryOptions);
-      const quotes = result.quotes; // Data array ada di dalam properti 'quotes'
+      const quotes = result.quotes;
+
+      if (!quotes) {
+        console.error(`❌ Gagal mendapat data untuk ${asset.symbol}`);
+        continue;
+      }
 
       console.log(
         `Berhasil mendapat ${quotes.length} hari data ${asset.symbol}. Menyimpan ke Supabase...`,
       );
 
-      // Kita filter(d => d.close !== null) karena Yahoo kadang memberikan data 'null' saat libur bursa
       const formattedData = quotes
         .filter((day) => day.close !== null && day.close !== undefined)
         .map((day) => ({
@@ -66,7 +69,7 @@ async function fetchMacroData() {
         );
       }
     }
-    console.log("\nDATABASE MAKRO SIAP DIGUNAKAN!");
+    console.log("\nDATABASE MAKRO SIAP UNTUK EVOLUSI!");
   } catch (err) {
     console.error("Terjadi kesalahan sistem:", err);
   }
