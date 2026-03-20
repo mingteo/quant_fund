@@ -1,0 +1,39 @@
+name: MING'S Daily Quant Oracle
+
+on:
+  schedule:
+    # Berjalan otomatis setiap jam 00:00 UTC (Jam 07:00 Pagi Waktu Indonesia Barat)
+    - cron: "0 0 * * *"
+  workflow_dispatch: # Tombol ajaib agar kita bisa test manual kapan saja
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Update Database (Spot, Derivatives, Macro)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          node fetchMacro.js
+          node fetchDerivatives.js
+          node fetchHistory.js
+
+      - name: Run Quant Engine & Broadcast to Telegram
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node dailyBot.js
