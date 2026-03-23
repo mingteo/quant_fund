@@ -2,9 +2,8 @@ name: MING'S Daily Quant Oracle
 
 on:
   schedule:
-    # Berjalan otomatis setiap jam 00:00 UTC (Jam 07:00 Pagi Waktu Indonesia Barat)
     - cron: "0 0 * * *"
-  workflow_dispatch: # Tombol ajaib agar kita bisa test manual kapan saja
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -17,25 +16,36 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "18"
+          cache: "npm" # Menggunakan cache agar install lebih cepat
 
       - name: Install Dependencies
         run: npm install
 
-      - name: Update Database (Spot, Derivatives, Macro)
+      - name: 🌐 Fetch Market History (Spot)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node fetchHistory.js
+        # Jika gagal di sini, workflow akan stop dan memberi tahu kita
+
+      - name: 📊 Fetch Macro & Derivatives
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           node fetchMacro.js
           node fetchDerivatives.js
-          node fetchHistory.js
 
-      - name: Run Quant Engine & Broadcast to Telegram
+      - name: ⚙️ Run Backtest Engine
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node backtest.js
+
+      - name: 🤖 Broadcast to Telegram Oracle
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          node dailyBot.js
-          node backtest.js
+        run: node dailyBot.js
