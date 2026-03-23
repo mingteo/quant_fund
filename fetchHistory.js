@@ -20,6 +20,7 @@ const targetCoins = [
   "LINKUSDT",
   "HYPEUSDT",
   "ZECUSDT",
+  "PAXGUSDT",
 ];
 
 // Fungsi jeda (delay) agar API Bybit tidak menganggap kita melakukan Spam / DDoS
