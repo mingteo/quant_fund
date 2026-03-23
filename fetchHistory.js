@@ -24,91 +24,85 @@ const targetCoins = [
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 async function setupAndFetchHistory() {
-  console.log("🛠️  MEMULAI PENARIKAN DATA UNTUK GITHUB ACTIONS...");
+  console.log("🛠️  STARTING ROBUST SYNC FOR GITHUB ACTIONS...");
 
   try {
-    // LANGKAH 1 & 2: Registrasi & Ambil ID
+    // LANGKAH 1: Pastikan semua koin terdaftar di tabel assets
+    console.log("Checking & Registering Assets...");
+    for (const symbol of targetCoins) {
+      await supabase
+        .from("assets")
+        .upsert({ symbol: symbol }, { onConflict: "symbol" });
+    }
+
+    // LANGKAH 2: Ambil ID Assets terbaru
     const { data: assets, error: assetError } = await supabase
       .from("assets")
       .select("id, symbol")
       .in("symbol", targetCoins);
 
-    if (assetError) throw assetError;
+    if (assetError || !assets || assets.length === 0) {
+      throw new Error(
+        "Assets not found in database. Check your 'assets' table.",
+      );
+    }
 
-    // LANGKAH 3: Tarik Data dengan Header Keamanan
+    console.log(`Found ${assets.length} assets. Starting data pull...`);
+
+    // LANGKAH 3: Tarik Sejarah per Koin
     for (const asset of assets) {
-      console.log(`⏳ Processing ${asset.symbol}...`);
-
+      console.log(`⏳ Fetching ${asset.symbol}...`);
       const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
 
       try {
         const response = await fetch(bybitUrl, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            // PENTING: User-Agent mencegah blokir IP GitHub
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-          },
+          headers: { "User-Agent": "Mozilla/5.0" },
         });
+        const json = await response.json();
 
-        if (!response.ok) {
-          console.error(`❌ HTTP Error ${asset.symbol}: ${response.status}`);
+        if (json.retCode !== 0 || !json.result.list) {
+          console.error(`❌ Bybit error for ${asset.symbol}: ${json.retMsg}`);
           continue;
         }
 
-        const jsonResponse = await response.json();
-
-        if (jsonResponse.retCode !== 0) {
-          console.error(`❌ Bybit Error ${asset.symbol}:`, jsonResponse.retMsg);
-          continue;
-        }
-
-        const rawKlines = jsonResponse.result.list;
-        if (!rawKlines || rawKlines.length === 0) continue;
-
-        const formattedData = rawKlines.map((candle) => ({
+        const formattedData = json.result.list.map((c) => ({
           asset_id: asset.id,
-          timestamp: new Date(parseInt(candle[0])).toISOString(),
-          open: parseFloat(candle[1]),
-          high: parseFloat(candle[2]),
-          low: parseFloat(candle[3]),
-          close: parseFloat(candle[4]),
-          volume: parseFloat(candle[5]),
+          timestamp: new Date(parseInt(c[0])).toISOString(),
+          open: parseFloat(c[1]),
+          high: parseFloat(c[2]),
+          low: parseFloat(c[3]),
+          close: parseFloat(c[4]),
+          volume: parseFloat(c[5]),
           timeframe: "1d",
         }));
 
-        // UPSERT KE SUPABASE
-        const { error: insertError } = await supabase
-          .from("market_data")
-          .upsert(formattedData, {
-            onConflict: "asset_id, timestamp, timeframe",
-          });
+        // PENTING: Kirim dalam potongan kecil (Chunking) agar tidak timeout di GitHub
+        const chunkSize = 200;
+        for (let i = 0; i < formattedData.length; i += chunkSize) {
+          const chunk = formattedData.slice(i, i + chunkSize);
+          const { error: upsertError } = await supabase
+            .from("market_data")
+            .upsert(chunk, { onConflict: "asset_id, timestamp, timeframe" });
 
-        if (insertError) {
-          console.error(
-            `❌ Supabase Error ${asset.symbol}:`,
-            insertError.message,
-          );
-        } else {
-          console.log(
-            `✅ ${asset.symbol}: ${formattedData.length} data points synced.`,
-          );
+          if (upsertError) {
+            console.error(
+              `❌ Upsert error for ${asset.symbol}: ${upsertError.message}`,
+            );
+          }
         }
-      } catch (innerErr) {
-        console.error(
-          `💥 Connection Failed for ${asset.symbol}:`,
-          innerErr.message,
-        );
+
+        console.log(`✅ ${asset.symbol} Synced (${formattedData.length} rows)`);
+      } catch (err) {
+        console.error(`💥 Failed fetching ${asset.symbol}:`, err.message);
       }
 
-      // Jeda 1 detik (Lebih aman untuk GitHub Actions)
-      await delay(1000);
+      await delay(1000); // Anti-spam delay
     }
 
-    console.log("\n🎉 SYNC SELESAI!");
+    console.log("\n🚀 DATABASE SYNC COMPLETE!");
   } catch (err) {
-    console.error("Critical System Error:", err);
+    console.error("CRITICAL ERROR:", err.message);
+    process.exit(1); // Beri sinyal gagal ke GitHub Actions
   }
 }
 
