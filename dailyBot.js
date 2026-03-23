@@ -5,10 +5,11 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY,
 );
+
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// --- FUNGSI MATEMATIKA ---
+// --- 1. FUNGSI MATEMATIKA ---
 function calculateEMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1] || 0;
   const k = 2 / (period + 1);
@@ -18,10 +19,12 @@ function calculateEMA(prices, period) {
   }
   return ema;
 }
+
 function calculateSMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1] || 0;
   return prices.slice(-period).reduce((a, b) => a + b, 0) / period;
 }
+
 function calculateROC(prices, period) {
   if (prices.length <= period) return 0;
   const current = prices[prices.length - 1];
@@ -29,9 +32,9 @@ function calculateROC(prices, period) {
   return ((current - past) / past) * 100;
 }
 
-// --- MAIN FUNCTION ---
+// --- 2. MAIN FUNCTION ---
 async function generateDailyReport() {
-  console.log("Menganalisis kondisi pasar hari ini...");
+  console.log("🛠️  Mengonstruksi Laporan Kuantitatif...");
 
   const targetCoins = [
     "BTCUSDT",
@@ -44,15 +47,15 @@ async function generateDailyReport() {
     "AVAXUSDT",
     "LINKUSDT",
     "HYPEUSDT",
-    "ZECUSDT",
   ];
+
   const { data: assets } = await supabase
     .from("assets")
     .select("id, symbol")
     .in("symbol", targetCoins);
   const assetMap = new Map(assets.map((a) => [a.symbol, a.id]));
 
-  // Tarik 100 hari data terakhir untuk kalkulasi EMA & ROC
+  // Tarik Data Harga
   let marketData = {};
   for (const symbol of targetCoins) {
     const assetId = assetMap.get(symbol);
@@ -61,14 +64,14 @@ async function generateDailyReport() {
       .select("close")
       .eq("asset_id", assetId)
       .order("timestamp", { ascending: false })
-      .limit(200); // Tarik descending, lalu reverse
+      .limit(200);
     marketData[symbol] = data.map((d) => parseFloat(d.close)).reverse();
   }
 
   const btcPrices = marketData["BTCUSDT"];
   const currentBTCPrice = btcPrices[btcPrices.length - 1];
 
-  // 1. MACRO & REGIME BTC
+  // A. Analisis Regime & Trend
   const ema20BTC = calculateEMA(btcPrices.slice(-100), 20);
   const ema50BTC = calculateEMA(btcPrices.slice(-100), 50);
   const regime =
@@ -76,116 +79,109 @@ async function generateDailyReport() {
       ? "MEAN-REVERTING"
       : "TRENDING";
   const trendDirection = ema20BTC > ema50BTC ? "BULLISH" : "BEARISH";
+  const mayer = currentBTCPrice / calculateSMA(btcPrices, 200);
 
-  // 2. MOMENTUM RANKING (Mencari 2 Koin Terkuat untuk "Higher Beta Position")
+  // B. Momentum Ranking (Top 2 Alts)
   let momentumRanking = [];
   for (const symbol of targetCoins) {
-    if (symbol === "BTCUSDT") continue; // BTC tidak masuk altcoin ranking
+    if (symbol === "BTCUSDT") continue;
     const prices = marketData[symbol];
     const roc14 = calculateROC(prices, 14);
     const isUptrend =
       calculateEMA(prices.slice(-100), 20) >
       calculateEMA(prices.slice(-100), 50);
-
-    if (isUptrend && roc14 > 0) {
+    if (isUptrend && roc14 > 0)
       momentumRanking.push({
         symbol: symbol.replace("USDT", ""),
         momentum: roc14,
       });
-    }
   }
   momentumRanking.sort((a, b) => b.momentum - a.momentum);
-  const topAlts = momentumRanking.slice(0, 2);
   const topAltsString =
-    topAlts.length > 0
-      ? topAlts.map((a) => `$${a.symbol}`).join(", ")
-      : "None (No Momentum)";
+    momentumRanking
+      .slice(0, 2)
+      .map((a) => `$${a.symbol}`)
+      .join(", ") || "None";
 
-  // 3. TARGET EXPOSURE
-  const mayer = currentBTCPrice / calculateSMA(btcPrices, 200);
-  let targetExposure = 0;
-  if (regime === "TRENDING" && trendDirection === "BULLISH") {
-    if (mayer < 0.8) targetExposure = 1.0;
-    else if (mayer >= 0.8 && mayer < 1.5) targetExposure = 0.8;
-    else if (mayer >= 1.5 && mayer < 2.4) targetExposure = 0.5;
-    else targetExposure = 0.0;
-  } else if (regime === "MEAN-REVERTING") {
-    targetExposure = 0.3;
-  }
-
-  // 4. DATA ASOSIASI (Derivatif & Makro - Ambil 1 hari terakhir dari DB)
+  // C. Data Makro (DXY)
   let associatedData = [];
-  const { data: derivData } = await supabase
-    .from("derivatives_data")
-    .select("funding_rate")
-    .eq("symbol", "BTCUSDT")
-    .order("timestamp", { ascending: false })
-    .limit(1);
-  if (derivData && derivData.length > 0) {
-    const fr = parseFloat(derivData[0].funding_rate);
-    if (fr > 0.0005) {
-      associatedData.push("High Leverage (Longs) detected. Risk of flush.");
-      targetExposure *= 0.7;
-    } else if (fr < -0.0001) {
-      associatedData.push("Negative FR detected. Short Squeeze potential.");
-      targetExposure = Math.min(1.0, targetExposure + 0.2);
-    }
-  }
-
-  const { data: dxyData } = await supabase
+  const { data: dxyRaw } = await supabase
     .from("macro_data")
     .select("close")
     .eq("symbol", "DXY")
     .order("timestamp", { ascending: false })
     .limit(50);
-  if (dxyData && dxyData.length >= 50) {
-    const dxyPrices = dxyData.map((d) => parseFloat(d.close)).reverse();
-    if (calculateEMA(dxyPrices, 20) > calculateEMA(dxyPrices, 50)) {
-      associatedData.push("DXY in Uptrend (Risk-Off global environment).");
-      targetExposure *= 0.5;
-    } else {
-      associatedData.push(
-        "DXY in Downtrend (Supportive liquidity environment).",
-      );
-    }
+  if (dxyRaw) {
+    const dxyPrices = dxyRaw.map((d) => parseFloat(d.close)).reverse();
+    const dxyUp = calculateEMA(dxyPrices, 20) > calculateEMA(dxyPrices, 50);
+    associatedData.push(
+      dxyUp ? "DXY Uptrend (Risk-Off)" : "DXY Downtrend (Supportive)",
+    );
   }
 
-  if (associatedData.length === 0)
-    associatedData.push("Market conditions normal. No extreme anomalies.");
+  // D. Ambil Posisi Real dari DB (Pie Chart Data)
+  const { data: currentPositions } = await supabase
+    .from("current_positions")
+    .select("symbol, percentage")
+    .order("percentage", { ascending: false });
 
-  // --- PEMFORMATAN PESAN GAYA SHIDA ---
+  // --- 3. PEMFORMATAN PESAN ---
   const dateStr = new Date().toLocaleDateString("en-GB", {
     day: "numeric",
     month: "long",
     year: "numeric",
   });
 
-  const cryptoPct = (targetExposure * 100).toFixed(0);
-  const cashPct = (100 - cryptoPct).toFixed(0);
+  // Hitung Exposure dari total posisi non-Cash
+  const cryptoPct =
+    currentPositions
+      ?.filter((p) => p.symbol !== "USDT" && p.symbol !== "Cash (USDT)")
+      .reduce((acc, curr) => acc + parseFloat(curr.percentage), 0) || 0;
+  const progressBar =
+    "▓".repeat(Math.round(cryptoPct / 10)) +
+    "░".repeat(Math.round((100 - cryptoPct) / 10));
 
-  const message = `
-🤖 *${dateStr} - QUANT ORACLE System Update*
+  let message = `*📊 QUANT ORACLE - DAILY REPORT*\n_${dateStr}_\n\n`;
+  message += `*─ MARKET REGIME ─*\n`;
+  message += `• *Status:* ${regime}\n`;
+  message += `• *Trend:* ${trendDirection === "BULLISH" ? "📈 BULLISH" : "📉 BEARISH"}\n`;
+  message += `• *Mayer:* ${mayer.toFixed(2)}x\n\n`;
 
-*Bias & Momentum Update:*
-Market Dominant Major: $BTC
-Optional Higher Beta Position: ${topAltsString}
-Optional Denominator: USDT (Cash)
+  message += `*─ ALLOCATION ─*\n`;
+  message += `*Exposure:* ${cryptoPct.toFixed(0)}% Crypto | ${(100 - cryptoPct).toFixed(0)}% Cash\n`;
+  message += `\`${progressBar}\`\n\n`;
 
-*BTC Market Regime Update:*
-REGIME in ${regime} state (${trendDirection})
+  message += `*─ CURRENT HOLDINGS ─*\n`;
+  if (currentPositions && currentPositions.length > 0) {
+    currentPositions.forEach((pos) => {
+      const isCash = pos.symbol === "USDT" || pos.symbol === "Cash (USDT)";
+      if (isCash) {
+        message += `• *$USDT* : ${parseFloat(pos.percentage).toFixed(1)}% (Liquidity)\n`;
+      } else {
+        const symbolUSDT = `${pos.symbol}USDT`;
+        const currentPrice = marketData[symbolUSDT]
+          ? marketData[symbolUSDT][marketData[symbolUSDT].length - 1]
+          : 0;
 
-*QUANT ORACLE PORTFOLIO TARGET*
-Current Target Holdings:
-${cryptoPct}% Spot Crypto 
-${cashPct}% Cash (USDT)
+        // Ambil Avg Price dari DB
+        const avgPrice = pos.avg_price
+          ? parseFloat(pos.avg_price)
+          : currentPrice;
+        const pnl = ((currentPrice - avgPrice) / avgPrice) * 100;
 
-*Associated Data:*
-${associatedData.join("\n")}
-  `.trim();
+        message += `• *$${pos.symbol.padEnd(5)}*: ${parseFloat(pos.percentage).toFixed(1)}%\n`;
+        message += `  └ Avg: $${avgPrice.toLocaleString()} → Now: $${currentPrice.toLocaleString()}\n`;
+        message += `  └ PnL: *${pnl >= 0 ? "🟢 +" : "🔴 "}${pnl.toFixed(2)}%*\n`;
+      }
+    });
+  }
 
-  console.log(message);
+  message += `\n*─ RISK & MOMENTUM ─*\n`;
+  message += `• *Top Momentum:* ${topAltsString}\n`;
+  message += `• *Macro:* ${associatedData.join(" | ")}\n\n`;
+  message += `_Generated by Oracle Quant Engine_`;
 
-  // --- KIRIM KE TELEGRAM ---
+  // --- 4. KIRIM KE TELEGRAM ---
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   try {
     const response = await fetch(url, {
@@ -198,13 +194,10 @@ ${associatedData.join("\n")}
       }),
     });
     const result = await response.json();
-    if (result.ok) {
-      console.log("\n✅ Berhasil mengirim laporan harian ke Telegram!");
-    } else {
-      console.error("\n❌ Gagal mengirim ke Telegram:", result.description);
-    }
+    if (result.ok) console.log("✅ Laporan terkirim!");
+    else console.error("❌ Gagal:", result.description);
   } catch (error) {
-    console.error("Error API Telegram:", error);
+    console.error("Error API:", error);
   }
 }
 

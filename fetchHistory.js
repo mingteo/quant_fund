@@ -1,13 +1,11 @@
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 
-// Inisialisasi Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY,
 );
 
-// 1. TENTUKAN KERANJANG KOIN (Bisa kamu tambah/kurangi sesuai selera)
 const targetCoins = [
   "BTCUSDT",
   "ETHUSDT",
@@ -23,29 +21,13 @@ const targetCoins = [
   "PAXGUSDT",
 ];
 
-// Fungsi jeda (delay) agar API Bybit tidak menganggap kita melakukan Spam / DDoS
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
 async function setupAndFetchHistory() {
-  console.log("🛠️ MEMULAI SETUP ASET & PENARIKAN DATA (1000 HARI)...");
+  console.log("🛠️  MEMULAI PENARIKAN DATA UNTUK GITHUB ACTIONS...");
 
   try {
-    // LANGKAH 1: Daftarkan Koin ke Tabel 'assets' jika belum ada
-    console.log("\n[1/3] Mendaftarkan keranjang koin ke database...");
-    for (const symbol of targetCoins) {
-      const { error } = await supabase
-        .from("assets")
-        .upsert({ symbol: symbol, is_active: true }, { onConflict: "symbol" });
-
-      if (error) {
-        console.error(`Gagal mendaftarkan ${symbol}:`, error.message);
-      } else {
-        console.log(`- ${symbol} terdaftar.`);
-      }
-    }
-
-    // LANGKAH 2: Ambil ID aset (UUID) dari database untuk relasi data
-    console.log("\n[2/3] Mengambil ID Aset...");
+    // LANGKAH 1 & 2: Registrasi & Ambil ID
     const { data: assets, error: assetError } = await supabase
       .from("assets")
       .select("id, symbol")
@@ -53,61 +35,80 @@ async function setupAndFetchHistory() {
 
     if (assetError) throw assetError;
 
-    // LANGKAH 3: Tarik Sejarah Harga 1000 Hari per Koin dari Bybit
-    console.log("\n[3/3] Menyedot data historis dari Bybit...");
+    // LANGKAH 3: Tarik Data dengan Header Keamanan
     for (const asset of assets) {
-      console.log(`\n⏳ Mengunduh riwayat ${asset.symbol}...`);
+      console.log(`⏳ Processing ${asset.symbol}...`);
 
       const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
 
-      const response = await fetch(bybitUrl);
-      const jsonResponse = await response.json();
-
-      if (jsonResponse.retCode !== 0) {
-        console.error(
-          `❌ Gagal menarik data ${asset.symbol}:`,
-          jsonResponse.retMsg,
-        );
-        continue;
-      }
-
-      const rawKlines = jsonResponse.result.list;
-
-      // Format data menyesuaikan skema tabel market_data
-      const formattedData = rawKlines.map((candle) => ({
-        asset_id: asset.id,
-        timestamp: new Date(parseInt(candle[0])).toISOString(),
-        open: parseFloat(candle[1]),
-        high: parseFloat(candle[2]),
-        low: parseFloat(candle[3]),
-        close: parseFloat(candle[4]),
-        volume: parseFloat(candle[5]),
-        timeframe: "1d",
-      }));
-
-      // Kirim data batch ke Supabase
-      const { error: insertError } = await supabase
-        .from("market_data")
-        .upsert(formattedData, {
-          onConflict: "asset_id, timestamp, timeframe",
+      try {
+        const response = await fetch(bybitUrl, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            // PENTING: User-Agent mencegah blokir IP GitHub
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          },
         });
 
-      if (insertError) {
+        if (!response.ok) {
+          console.error(`❌ HTTP Error ${asset.symbol}: ${response.status}`);
+          continue;
+        }
+
+        const jsonResponse = await response.json();
+
+        if (jsonResponse.retCode !== 0) {
+          console.error(`❌ Bybit Error ${asset.symbol}:`, jsonResponse.retMsg);
+          continue;
+        }
+
+        const rawKlines = jsonResponse.result.list;
+        if (!rawKlines || rawKlines.length === 0) continue;
+
+        const formattedData = rawKlines.map((candle) => ({
+          asset_id: asset.id,
+          timestamp: new Date(parseInt(candle[0])).toISOString(),
+          open: parseFloat(candle[1]),
+          high: parseFloat(candle[2]),
+          low: parseFloat(candle[3]),
+          close: parseFloat(candle[4]),
+          volume: parseFloat(candle[5]),
+          timeframe: "1d",
+        }));
+
+        // UPSERT KE SUPABASE
+        const { error: insertError } = await supabase
+          .from("market_data")
+          .upsert(formattedData, {
+            onConflict: "asset_id, timestamp, timeframe",
+          });
+
+        if (insertError) {
+          console.error(
+            `❌ Supabase Error ${asset.symbol}:`,
+            insertError.message,
+          );
+        } else {
+          console.log(
+            `✅ ${asset.symbol}: ${formattedData.length} data points synced.`,
+          );
+        }
+      } catch (innerErr) {
         console.error(
-          `❌ Gagal menyimpan ${asset.symbol}:`,
-          insertError.message,
+          `💥 Connection Failed for ${asset.symbol}:`,
+          innerErr.message,
         );
-      } else {
-        console.log(`✅ SUKSES! 1000 hari ${asset.symbol} berhasil ditanam.`);
       }
 
-      // Jeda 500 milidetik sebelum lanjut ke koin berikutnya
-      await delay(500);
+      // Jeda 1 detik (Lebih aman untuk GitHub Actions)
+      await delay(1000);
     }
 
-    console.log("\n🎉 SELURUH DATA BIG CAP SIAP UNTUK MESIN PERINGKAT!");
+    console.log("\n🎉 SYNC SELESAI!");
   } catch (err) {
-    console.error("Terjadi kesalahan sistem:", err);
+    console.error("Critical System Error:", err);
   }
 }
 

@@ -101,7 +101,11 @@ async function runBacktest() {
   // C. Inisialisasi Portofolio
   let capitalUSDT = 10000;
   let holdings = {};
-  targetCoins.forEach((coin) => (holdings[coin] = 0));
+  let costBasis = {};
+  targetCoins.forEach((coin) => {
+    holdings[coin] = 0;
+    costBasis[coin] = 0;
+  });
   let peakValue = 10000;
   let maxDrawdown = 0;
   let dailyRecords = [];
@@ -204,17 +208,27 @@ async function runBacktest() {
     for (const symbol of targetCoins) {
       const currentPrice = marketData[symbol]?.get(todayStr);
       if (!currentPrice) continue;
+
+      const currentVal = holdings[symbol] * currentPrice;
       const targetVal = topSymbols.includes(symbol) ? budgetPerCoin : 0;
-      const diff = targetVal - holdings[symbol] * currentPrice;
+      const diff = targetVal - currentVal;
 
       if (Math.abs(diff) > 50) {
         if (diff > 0) {
+          // BELI (DCA UP/DOWN)
           capitalUSDT -= diff;
           holdings[symbol] += diff / currentPrice;
+          costBasis[symbol] += diff; // Tambah modal yang dikeluarkan
           actionLog.push(`+${symbol.replace("USDT", "")}`);
         } else {
+          // JUAL (REDUCE/CLOSE)
+          const sellQty = Math.abs(diff) / currentPrice;
+          // Kurangi cost basis secara proporsional dengan jumlah yang dijual
+          const ratio = sellQty / holdings[symbol];
+          costBasis[symbol] -= costBasis[symbol] * ratio;
+
           capitalUSDT += Math.abs(diff);
-          holdings[symbol] -= Math.abs(diff) / currentPrice;
+          holdings[symbol] -= sellQty;
           actionLog.push(`-${symbol.replace("USDT", "")}`);
         }
         dayHasTrades = true;
@@ -225,15 +239,38 @@ async function runBacktest() {
     // TAHAP 5: LOG HARIAN (DI DALAM LOOP)
     if (dayHasTrades) {
       console.log(`\n=========================================`);
-      console.log(`🗓️  [${dateOnly}] TWX PORTFOLIO UPDATE`);
-      if (alerts.length > 0) console.log(`⚠️  Alerts: ${alerts.join(" | ")}`);
+      console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE`);
       console.log(
         `📈 Market: ${regime} (${trendDirection}) | Mayer: ${mayer.toFixed(2)}x`,
       );
       console.log(
-        `🔄 Aksi: ${actionLog.join(", ")} | Exp: ${(targetExposure * 100).toFixed(0)}%`,
+        `🔄 Aksi  : ${actionLog.join(", ")} | Exp: ${(targetExposure * 100).toFixed(0)}%`,
       );
-      console.log(`💰 Equity: $${currentPortfolioValue.toFixed(2)}`);
+      console.log(
+        `💰 Equity: $${currentPortfolioValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+      );
+      console.log(`\nCurrent Holdings:`);
+
+      targetCoins.forEach((symbol) => {
+        const currentPrice = marketData[symbol]?.get(todayStr);
+        const val = holdings[symbol] * currentPrice;
+        const pct = (val / currentPortfolioValue) * 100;
+
+        if (pct > 0.5) {
+          // HITUNG AVG PRICE
+          const avgPrice = costBasis[symbol] / holdings[symbol];
+          const pnlPct = ((currentPrice - avgPrice) / avgPrice) * 100;
+
+          console.log(
+            `${pct.toFixed(1).padStart(5)}% Spot $${symbol.replace("USDT", "").padEnd(5)} ` +
+              `($${avgPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} avg) ` +
+              `[${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%]`,
+          );
+        }
+      });
+
+      const cashPct = (capitalUSDT / currentPortfolioValue) * 100;
+      console.log(`${cashPct.toFixed(1).padStart(5)}% Cash (USDT)`);
       console.log(`=========================================`);
     }
 
@@ -297,6 +334,7 @@ async function runBacktest() {
       finalPositions.push({
         symbol: symbol.replace("USDT", ""),
         percentage: pct.toFixed(2),
+        avg_price: (costBasis[symbol] / holdings[symbol]).toFixed(4),
       });
   }
   await supabase.from("current_positions").insert(finalPositions);
