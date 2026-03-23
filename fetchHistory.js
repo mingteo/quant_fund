@@ -51,19 +51,43 @@ async function setupAndFetchHistory() {
 
     // LANGKAH 3: Tarik Sejarah per Koin
     for (const asset of assets) {
-      console.log(`⏳ Fetching ${asset.symbol}...`);
-      const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
+      console.log(`⏳ Processing ${asset.symbol}...`);
+
+      // Kita coba pakai bytick.com (seringkali lebih bersahabat dengan cloud server)
+      const bybitUrl = `https://api.bytick.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
 
       try {
         const response = await fetch(bybitUrl, {
-          headers: { "User-Agent": "Mozilla/5.0" },
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            Referer: "https://www.bybit.com/",
+            "User-Agent":
+              "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          },
         });
-        const json = await response.json();
 
-        if (json.retCode !== 0 || !json.result.list) {
-          console.error(`❌ Bybit error for ${asset.symbol}: ${json.retMsg}`);
+        if (response.status === 403) {
+          console.error(
+            `❌ BYBIT BLOCK (403): IP GitHub Actions ini diblokir. Mencoba bypass...`,
+          );
+          // Jika tetap 403, kita tidak bisa memaksa lewat IP ini.
           continue;
         }
+        // for (const asset of assets) {
+        //   console.log(`⏳ Fetching ${asset.symbol}...`);
+        //   const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
+
+        //   try {
+        //     const response = await fetch(bybitUrl, {
+        //       headers: { "User-Agent": "Mozilla/5.0" },
+        //     });
+        //     const json = await response.json();
+
+        //     if (json.retCode !== 0 || !json.result.list) {
+        //       console.error(`❌ Bybit error for ${asset.symbol}: ${json.retMsg}`);
+        //       continue;
+        //     }
 
         const formattedData = json.result.list.map((c) => ({
           asset_id: asset.id,
