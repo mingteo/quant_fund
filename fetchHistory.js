@@ -52,29 +52,71 @@ async function setupAndFetchHistory() {
     // LANGKAH 3: Tarik Sejarah per Koin
     for (const asset of assets) {
       console.log(`⏳ Fetching ${asset.symbol}...`);
-      const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
+      let formattedData = [];
 
       try {
-        const response = await fetch(bybitUrl, {
-          headers: { "User-Agent": "Mozilla/5.0" },
-        });
-        const json = await response.json();
+        const binanceOnly = ["ZECUSDT", "PAXGUSDT"];
+        let useBinance = binanceOnly.includes(asset.symbol);
+        
+        if (!useBinance) {
+          const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
+          const response = await fetch(bybitUrl, {
+            headers: { "User-Agent": "Mozilla/5.0" },
+          });
+          const json = await response.json();
 
-        if (json.retCode !== 0 || !json.result.list) {
-          console.error(`❌ Bybit error for ${asset.symbol}: ${json.retMsg}`);
-          continue;
+          if (
+            json.retCode === 0 &&
+            json.result.list &&
+            json.result.list.length > 0
+          ) {
+            // Check if data is stale (oldest candle is more than 3 days old)
+            // Bybit returns newest first, so list[0] is the newest
+            const newestTimestamp = parseInt(json.result.list[0][0]);
+            const isStale = (Date.now() - newestTimestamp) > 3 * 24 * 60 * 60 * 1000;
+            
+            if (!isStale) {
+              formattedData = json.result.list.map((c) => ({
+                asset_id: asset.id,
+                timestamp: new Date(parseInt(c[0])).toISOString(),
+                open: parseFloat(c[1]),
+                high: parseFloat(c[2]),
+                low: parseFloat(c[3]),
+                close: parseFloat(c[4]),
+                volume: parseFloat(c[5]),
+                timeframe: "1d",
+              }));
+            } else {
+              console.log(`⚠️ Bybit data for ${asset.symbol} is stale. Trying Binance...`);
+              useBinance = true;
+            }
+          } else {
+            console.log(`⚠️ Bybit returned no valid data for ${asset.symbol}. Trying Binance...`);
+            useBinance = true;
+          }
         }
 
-        const formattedData = json.result.list.map((c) => ({
-          asset_id: asset.id,
-          timestamp: new Date(parseInt(c[0])).toISOString(),
-          open: parseFloat(c[1]),
-          high: parseFloat(c[2]),
-          low: parseFloat(c[3]),
-          close: parseFloat(c[4]),
-          volume: parseFloat(c[5]),
-          timeframe: "1d",
-        }));
+        if (useBinance) {
+          const binanceUrl = `https://api.binance.com/api/v3/klines?symbol=${asset.symbol}&interval=1d&limit=1000`;
+          const binanceRes = await fetch(binanceUrl);
+          const binanceData = await binanceRes.json();
+
+          if (Array.isArray(binanceData) && binanceData.length > 0) {
+            formattedData = binanceData.map((c) => ({
+              asset_id: asset.id,
+              timestamp: new Date(parseInt(c[0])).toISOString(),
+              open: parseFloat(c[1]),
+              high: parseFloat(c[2]),
+              low: parseFloat(c[3]),
+              close: parseFloat(c[4]),
+              volume: parseFloat(c[5]),
+              timeframe: "1d",
+            }));
+          } else {
+            console.error(`❌ Both Bybit and Binance failed for ${asset.symbol}`);
+            continue;
+          }
+        }
 
         // PENTING: Kirim dalam potongan kecil (Chunking) agar tidak timeout di GitHub
         const chunkSize = 200;
