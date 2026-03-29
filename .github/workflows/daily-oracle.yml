@@ -34,15 +34,14 @@ jobs:
         run: node fetchHistory.js
 
       - name: 📊 Fetch Macro & Derivatives
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          # Tambahkan Telegram di sini juga jika script macro/derivatives-mu butuh kirim log
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          node fetchMacro.js
-          node fetchDerivatives.js
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+      BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
+    run: |
+      node fetchMacro.js
+      node fetchDerivatives.js
 
       - name: ⚙️ Run Backtest Engine
         env:
