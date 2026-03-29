@@ -7,46 +7,41 @@ const supabase = createClient(
 );
 
 async function fetchDerivatives() {
-  console.log("🔥 FETCHING OPEN INTEREST VIA BINANCE PUBLIC (NO-AUTH)...");
+  console.log(
+    "🔥 FETCHING OPEN INTEREST VIA MEXC PUBLIC (BYPASS REGULATION)...",
+  );
 
-  // Daftar koin yang ingin dipantau OI-nya
-  const symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"]; // Format MEXC pakai underscore
 
   for (const symbol of symbols) {
-    console.log(`⏳ Getting Binance OI for ${symbol}...`);
+    console.log(`⏳ Getting MEXC OI for ${symbol}...`);
 
-    // Binance Futures Public API - Open Interest Statistics
-    // Parameter: symbol, period (5m, 1h, 1d)
-    const url = `https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=1`;
+    // MEXC Futures Public API - Open Interest
+    const url = `https://contract.mexc.com/api/v1/contract/open_interest?symbol=${symbol}`;
 
     try {
       const response = await fetch(url, {
         headers: {
           "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0",
         },
       });
 
-      if (!response.ok) {
-        console.error(`❌ Binance Error ${symbol}: HTTP ${response.status}`);
+      const json = await response.json();
+
+      if (json.code !== 200 || !json.data) {
+        console.error(`❌ MEXC Error ${symbol}: ${json.msg || "No Data"}`);
         continue;
       }
 
-      const data = await response.json();
-
-      if (!data || data.length === 0) {
-        console.warn(`⚠️ No data returned for ${symbol}`);
-        continue;
-      }
-
-      // Ambil data terbaru (index 0)
-      const latest = data[0];
-      const sumOpenInterest = parseFloat(latest.sumOpenInterest);
+      // Ambil nilai Open Interest
+      const openInterest = parseFloat(json.data.openInterest);
+      const cleanSymbol = symbol.replace("_", ""); // Kembalikan ke format BTCUSDT
 
       const { error: dbError } = await supabase.from("derivatives_data").upsert(
         {
-          symbol: symbol,
-          open_interest: sumOpenInterest,
+          symbol: cleanSymbol,
+          open_interest: openInterest,
           timestamp: new Date().toISOString(),
         },
         { onConflict: "symbol" },
@@ -55,13 +50,12 @@ async function fetchDerivatives() {
       if (dbError) console.error(`❌ DB Error ${symbol}:`, dbError.message);
       else
         console.log(
-          `✅ ${symbol} OI: ${sumOpenInterest.toLocaleString()} Synced.`,
+          `✅ ${cleanSymbol} OI: ${openInterest.toLocaleString()} Synced from MEXC.`,
         );
     } catch (err) {
       console.error(`💥 Fatal Error ${symbol}:`, err.message);
     }
 
-    // Jeda sebentar agar tidak kena rate limit
     await new Promise((res) => setTimeout(res, 1000));
   }
 }
