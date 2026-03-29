@@ -9,156 +9,11 @@ const supabase = createClient(
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const targetCoins = [
-  "BTCUSDT",
-  "ETHUSDT",
-  "SOLUSDT",
-  "SUIUSDT",
-  "BNBUSDT",
-  "XRPUSDT",
-  "DOGEUSDT",
-  "AVAXUSDT",
-  "LINKUSDT",
-  "HYPEUSDT",
-  "ZECUSDT",
-  "PAXGUSDT",
-];
-
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
-async function setupAndFetchHistory() {
-  console.log("🛠️  STARTING ROBUST SYNC FOR GITHUB ACTIONS...");
-
-  try {
-    // LANGKAH 1: Pastikan semua koin terdaftar di tabel assets
-    console.log("Checking & Registering Assets...");
-    for (const symbol of targetCoins) {
-      await supabase
-        .from("assets")
-        .upsert({ symbol: symbol }, { onConflict: "symbol" });
-    }
-
-    // LANGKAH 2: Ambil ID Assets terbaru
-    const { data: assets, error: assetError } = await supabase
-      .from("assets")
-      .select("id, symbol")
-      .in("symbol", targetCoins);
-
-    if (assetError || !assets || assets.length === 0) {
-      throw new Error(
-        "Assets not found in database. Check your 'assets' table.",
-      );
-    }
-
-    console.log(`Found ${assets.length} assets. Starting data pull...`);
-
-    // LANGKAH 3: Tarik Sejarah per Koin
-    for (const asset of assets) {
-      console.log(`⏳ Fetching ${asset.symbol}...`);
-      let formattedData = [];
-
-      try {
-        const binanceOnly = ["ZECUSDT", "PAXGUSDT"];
-        let useBinance = binanceOnly.includes(asset.symbol);
-
-        if (!useBinance) {
-          const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
-          const response = await fetch(bybitUrl, {
-            headers: { "User-Agent": "Mozilla/5.0" },
-          });
-          const json = await response.json();
-
-          if (
-            json.retCode === 0 &&
-            json.result.list &&
-            json.result.list.length > 0
-          ) {
-            // Check if data is stale (oldest candle is more than 3 days old)
-            // Bybit returns newest first, so list[0] is the newest
-            const newestTimestamp = parseInt(json.result.list[0][0]);
-            const isStale =
-              Date.now() - newestTimestamp > 3 * 24 * 60 * 60 * 1000;
-
-            if (!isStale) {
-              formattedData = json.result.list.map((c) => ({
-                asset_id: asset.id,
-                timestamp: new Date(parseInt(c[0])).toISOString(),
-                open: parseFloat(c[1]),
-                high: parseFloat(c[2]),
-                low: parseFloat(c[3]),
-                close: parseFloat(c[4]),
-                volume: parseFloat(c[5]),
-                timeframe: "1d",
-              }));
-            } else {
-              console.log(
-                `⚠️ Bybit data for ${asset.symbol} is stale. Trying Binance...`,
-              );
-              useBinance = true;
-            }
-          } else {
-            console.log(
-              `⚠️ Bybit returned no valid data for ${asset.symbol}. Trying Binance...`,
-            );
-            useBinance = true;
-          }
-        }
-
-        if (useBinance) {
-          const binanceUrl = `https://api.binance.com/api/v3/klines?symbol=${asset.symbol}&interval=1d&limit=1000`;
-          const binanceRes = await fetch(binanceUrl);
-          const binanceData = await binanceRes.json();
-
-          if (Array.isArray(binanceData) && binanceData.length > 0) {
-            formattedData = binanceData.map((c) => ({
-              asset_id: asset.id,
-              timestamp: new Date(parseInt(c[0])).toISOString(),
-              open: parseFloat(c[1]),
-              high: parseFloat(c[2]),
-              low: parseFloat(c[3]),
-              close: parseFloat(c[4]),
-              volume: parseFloat(c[5]),
-              timeframe: "1d",
-            }));
-          } else {
-            console.error(
-              `❌ Both Bybit and Binance failed for ${asset.symbol}`,
-            );
-            continue;
-          }
-        }
-
-        // PENTING: Kirim dalam potongan kecil (Chunking) agar tidak timeout di GitHub
-        const chunkSize = 200;
-        for (let i = 0; i < formattedData.length; i += chunkSize) {
-          const chunk = formattedData.slice(i, i + chunkSize);
-          const { error: upsertError } = await supabase
-            .from("market_data")
-            .upsert(chunk, { onConflict: "asset_id, timestamp, timeframe" });
-
-          if (upsertError) {
-            console.error(
-              `❌ Upsert error for ${asset.symbol}: ${upsertError.message}`,
-            );
-          }
-        }
-
-        console.log(`✅ ${asset.symbol} Synced (${formattedData.length} rows)`);
-      } catch (err) {
-        console.error(`💥 Failed fetching ${asset.symbol}:`, err.message);
-      }
-
-      await delay(1000); // Anti-spam delay
-    }
-
-    console.log("\n🚀 DATABASE SYNC COMPLETE!");
-  } catch (err) {
-    console.error("CRITICAL ERROR:", err.message);
-    process.exit(1); // Beri sinyal gagal ke GitHub Actions
-  }
-}
-
+// --- 1. FUNGSI NOTIFIKASI TELEGRAM ---
 async function sendTelegramUpdate(status, message) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
   const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
   const text = `${status === "success" ? "✅" : "❌"} *SYSTEM NOTIFICATION*\n\n${message}\n\n🕒 _${new Date().toLocaleString("id-ID")}_`;
 
@@ -177,43 +32,118 @@ async function sendTelegramUpdate(status, message) {
   }
 }
 
-// Update fungsi utama kamu (setupAndFetchHistory)
+// --- 2. FUNGSI UTAMA FETCH ---
 async function setupAndFetchHistory() {
   console.log("🛠️ MEMULAI PENARIKAN DATA...");
+
+  // INI YANG TADI HILANG: Definisi daftar koin
+  const assets = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "SUIUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "HYPEUSDT",
+    "ZECUSDT",
+    "PAXGUSDT",
+  ];
+
   let successCount = 0;
   let failCount = 0;
 
   try {
-    // ... (Logika ambil assets kamu yang lama) ...
+    // Pastikan tabel assets di Supabase sudah sinkron dengan list di atas
+    const { data: dbAssets, error: assetError } = await supabase
+      .from("assets")
+      .select("id, symbol");
 
-    for (const asset of assets) {
-      // ... (Logika fetch kline Bybit kamu yang lama) ...
-
-      if (insertError) {
-        failCount++;
-      } else {
-        successCount++;
-      }
-      await delay(1000);
+    if (assetError || !dbAssets) {
+      throw new Error("Gagal mengambil daftar assets dari database Supabase.");
     }
 
-    // KIRIM NOTIFIKASI SUKSES KE TELEGRAM
+    const assetMap = new Map(dbAssets.map((a) => [a.symbol, a.id]));
+
+    for (const symbol of assets) {
+      const assetId = assetMap.get(symbol);
+      if (!assetId) {
+        console.warn(
+          `⚠️ Skip ${symbol}: Tidak terdaftar di tabel assets Supabase.`,
+        );
+        failCount++;
+        continue;
+      }
+
+      console.log(`⏳ Fetching ${symbol} (ID: ${assetId})...`);
+
+      // Gunakan api.bytick.com (lebih tahan blokir GitHub)
+      const url = `https://api.bytick.com/v5/market/kline?category=spot&symbol=${symbol}&interval=D&limit=1000`;
+
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+          Accept: "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        console.error(`❌ Error ${symbol}: HTTP ${response.status}`);
+        failCount++;
+        continue;
+      }
+
+      const json = await response.json();
+      const klines = json.result?.list;
+
+      if (!klines || klines.length === 0) {
+        console.warn(`⚠️ Data ${symbol} kosong dari Bybit.`);
+        failCount++;
+        continue;
+      }
+
+      const formatted = klines.map((k) => ({
+        asset_id: assetId,
+        timestamp: new Date(parseInt(k[0])).toISOString(),
+        open: parseFloat(k[1]),
+        high: parseFloat(k[2]),
+        low: parseFloat(k[3]),
+        close: parseFloat(k[4]),
+        volume: parseFloat(k[5]),
+      }));
+
+      const { error: upsertError } = await supabase
+        .from("market_data")
+        .upsert(formatted, { onConflict: "asset_id, timestamp" });
+
+      if (upsertError) {
+        console.error(`❌ DB Error ${symbol}:`, upsertError.message);
+        failCount++;
+      } else {
+        console.log(`✅ Success: ${formatted.length} rows for ${symbol}`);
+        successCount++;
+      }
+
+      await delay(1000); // Jeda anti-spam
+    }
+
+    // KIRIM NOTIFIKASI SUKSES
     await sendTelegramUpdate(
       "success",
       `*DATABASE SYNC COMPLETE*\n` +
         `📦 Assets Synced: ${successCount}\n` +
-        `⚠️ Failed: ${failCount}\n\n` +
-        `🚀 _Data market terbaru sudah siap di Dashboard._`,
+        `⚠️ Failed/Skipped: ${failCount}\n\n` +
+        `🚀 _Data market siap diproses Backtest Engine._`,
     );
-
-    console.log("\n🎉 SYNC SELESAI & LOG TERKIRIM!");
   } catch (err) {
-    // KIRIM NOTIFIKASI ERROR KE TELEGRAM
+    console.error("💥 Critical System Error:", err.message);
     await sendTelegramUpdate(
       "error",
-      `*CRITICAL ERROR*\nMessage: ${err.message}`,
+      `*CRITICAL FETCH ERROR*\nMessage: ${err.message}`,
     );
-    console.error("Critical System Error:", err);
   }
 }
 
