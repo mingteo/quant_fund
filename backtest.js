@@ -94,9 +94,21 @@ async function runBacktest() {
 
   const { data: btcTimeline } = await supabase
     .from("market_data")
-    .select("timestamp")
+    .select("*")
     .eq("asset_id", assetMap.get("BTCUSDT"))
     .order("timestamp", { ascending: true });
+
+  if (!btcTimeline || btcTimeline.length < 200) {
+    console.error(
+      "❌ ABORT: Data Market tidak cukup untuk Backtest (Butuh min 200 hari).",
+    );
+    console.log(
+      "Saran: Pastikan fetchHistory.js berhasil mengisi market_data terlebih dahulu.",
+    );
+    return; // Hentikan script dengan sopan, bukan dengan error pecah
+  }
+
+  const startDate = btcTimeline[0].timestamp;
 
   // C. Inisialisasi Portofolio
   let capitalUSDT = 10000;
@@ -112,9 +124,8 @@ async function runBacktest() {
   let totalTrades = 0;
 
   const startIdx = 200;
-  const startBTCPrice = marketData["BTCUSDT"].get(
-    btcTimeline[startIdx].timestamp,
-  );
+  const startBTCPrice =
+    marketData["BTCUSDT"]?.get(btcTimeline[startIdx].timestamp) || 1;
   const startSPXPrice =
     spxTimeline.find(
       (d) =>
