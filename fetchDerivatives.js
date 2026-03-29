@@ -7,56 +7,43 @@ const supabase = createClient(
 );
 
 async function fetchDerivatives() {
-  console.log("🔥 FETCHING DERIVATIVES VIA OKX PUBLIC...");
+  console.log("🔥 FETCHING REAL OPEN INTEREST VIA OKX...");
 
-  // OKX menggunakan format: BTC-USDT-SWAP
+  // Format OKX: BTC-USDT-SWAP
   const symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"];
 
   for (const symbol of symbols) {
-    console.log(`⏳ Getting OKX Data for ${symbol}...`);
+    console.log(`⏳ Syncing OI for ${symbol}...`);
 
-    // OKX API V5 - Tickers (Memberikan Open Interest & Volume secara publik)
-    const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol}`;
+    // Endpoint khusus Open Interest OKX
+    const url = `https://www.okx.com/api/v5/public/open-interest?instId=${symbol}`;
 
     try {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0",
-        },
-      });
-
+      const response = await fetch(url);
       const json = await response.json();
 
-      if (json.code !== "0" || !json.data || json.data.length === 0) {
-        console.error(`❌ OKX Error ${symbol}: ${json.msg || "No Data"}`);
-        continue;
-      }
+      if (json.code === "0" && json.data.length > 0) {
+        const oiValue = parseFloat(json.data[0].oi);
+        const cleanSymbol = symbol.split("-")[0] + "USDT";
 
-      const data = json.data[0];
-      // OKX tidak memberikan OI di ticker biasa, tapi kita bisa pakai 24h Volume
-      // sebagai indikator 'Panas' tidaknya market derivatif.
-      const vol24h = parseFloat(data.vol24h);
-      const cleanSymbol = symbol.split("-")[0] + "USDT"; // Balik ke BTCUSDT
-
-      const { error: dbError } = await supabase.from("derivatives_data").upsert(
-        {
-          symbol: cleanSymbol,
-          open_interest: vol24h, // Kita simpan volume sebagai proxy 'panas' market
-          timestamp: new Date().toISOString(),
-        },
-        { onConflict: "symbol" },
-      );
-
-      if (dbError) console.error(`❌ DB Error ${symbol}:`, dbError.message);
-      else
-        console.log(
-          `✅ ${cleanSymbol} Activity: ${vol24h.toLocaleString()} Synced from OKX.`,
+        const { error } = await supabase.from("derivatives_data").upsert(
+          {
+            symbol: cleanSymbol,
+            open_interest: oiValue,
+            timestamp: new Date().toISOString(),
+          },
+          { onConflict: "symbol" },
         );
-    } catch (err) {
-      console.error(`💥 Fatal Error ${symbol}:`, err.message);
-    }
 
+        if (error) console.error(`❌ Supabase Error: ${error.message}`);
+        else
+          console.log(
+            `✅ ${cleanSymbol} OI: ${oiValue.toLocaleString()} Synced!`,
+          );
+      }
+    } catch (err) {
+      console.error(`💥 Error: ${err.message}`);
+    }
     await new Promise((res) => setTimeout(res, 1000));
   }
 }
