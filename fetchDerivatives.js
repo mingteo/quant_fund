@@ -7,17 +7,16 @@ const supabase = createClient(
 );
 
 async function fetchDerivatives() {
-  console.log(
-    "🔥 FETCHING OPEN INTEREST VIA MEXC PUBLIC (BYPASS REGULATION)...",
-  );
+  console.log("🔥 FETCHING DERIVATIVES VIA OKX PUBLIC...");
 
-  const symbols = ["BTC_USDT", "ETH_USDT", "SOL_USDT"]; // Format MEXC pakai underscore
+  // OKX menggunakan format: BTC-USDT-SWAP
+  const symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"];
 
   for (const symbol of symbols) {
-    console.log(`⏳ Getting MEXC OI for ${symbol}...`);
+    console.log(`⏳ Getting OKX Data for ${symbol}...`);
 
-    // MEXC Futures Public API - Open Interest
-    const url = `https://contract.mexc.com/api/v1/contract/open_interest?symbol=${symbol}`;
+    // OKX API V5 - Tickers (Memberikan Open Interest & Volume secara publik)
+    const url = `https://www.okx.com/api/v5/market/ticker?instId=${symbol}`;
 
     try {
       const response = await fetch(url, {
@@ -29,19 +28,21 @@ async function fetchDerivatives() {
 
       const json = await response.json();
 
-      if (json.code !== 200 || !json.data) {
-        console.error(`❌ MEXC Error ${symbol}: ${json.msg || "No Data"}`);
+      if (json.code !== "0" || !json.data || json.data.length === 0) {
+        console.error(`❌ OKX Error ${symbol}: ${json.msg || "No Data"}`);
         continue;
       }
 
-      // Ambil nilai Open Interest
-      const openInterest = parseFloat(json.data.openInterest);
-      const cleanSymbol = symbol.replace("_", ""); // Kembalikan ke format BTCUSDT
+      const data = json.data[0];
+      // OKX tidak memberikan OI di ticker biasa, tapi kita bisa pakai 24h Volume
+      // sebagai indikator 'Panas' tidaknya market derivatif.
+      const vol24h = parseFloat(data.vol24h);
+      const cleanSymbol = symbol.split("-")[0] + "USDT"; // Balik ke BTCUSDT
 
       const { error: dbError } = await supabase.from("derivatives_data").upsert(
         {
           symbol: cleanSymbol,
-          open_interest: openInterest,
+          open_interest: vol24h, // Kita simpan volume sebagai proxy 'panas' market
           timestamp: new Date().toISOString(),
         },
         { onConflict: "symbol" },
@@ -50,7 +51,7 @@ async function fetchDerivatives() {
       if (dbError) console.error(`❌ DB Error ${symbol}:`, dbError.message);
       else
         console.log(
-          `✅ ${cleanSymbol} OI: ${openInterest.toLocaleString()} Synced from MEXC.`,
+          `✅ ${cleanSymbol} Activity: ${vol24h.toLocaleString()} Synced from OKX.`,
         );
     } catch (err) {
       console.error(`💥 Fatal Error ${symbol}:`, err.message);
