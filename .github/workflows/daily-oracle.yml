@@ -2,8 +2,9 @@ name: MING'S Daily Quant Oracle
 
 on:
   schedule:
-    - cron: "0 0 * * *"
-  workflow_dispatch:
+    # Berjalan setiap 4 jam (04:00, 08:00, 12:00, dst WIB)
+    - cron: "0 */4 * * *"
+  workflow_dispatch: # Tombol manual tetap ada
 
 jobs:
   run-bot:
@@ -16,7 +17,7 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "18"
-          cache: "npm" # Menggunakan cache agar install lebih cepat
+          cache: "npm"
 
       - name: Install Dependencies
         run: npm install
@@ -25,13 +26,17 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node fetchHistory.js
-        # Jika gagal di sini, workflow akan stop dan memberi tahu kita
 
       - name: 📊 Fetch Macro & Derivatives
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # Tambahkan Telegram di sini juga jika script macro/derivatives-mu butuh kirim log
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           node fetchMacro.js
           node fetchDerivatives.js

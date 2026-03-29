@@ -6,6 +6,9 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY,
 );
 
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
 const targetCoins = [
   "BTCUSDT",
   "ETHUSDT",
@@ -57,7 +60,7 @@ async function setupAndFetchHistory() {
       try {
         const binanceOnly = ["ZECUSDT", "PAXGUSDT"];
         let useBinance = binanceOnly.includes(asset.symbol);
-        
+
         if (!useBinance) {
           const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${asset.symbol}&interval=D&limit=1000`;
           const response = await fetch(bybitUrl, {
@@ -73,8 +76,9 @@ async function setupAndFetchHistory() {
             // Check if data is stale (oldest candle is more than 3 days old)
             // Bybit returns newest first, so list[0] is the newest
             const newestTimestamp = parseInt(json.result.list[0][0]);
-            const isStale = (Date.now() - newestTimestamp) > 3 * 24 * 60 * 60 * 1000;
-            
+            const isStale =
+              Date.now() - newestTimestamp > 3 * 24 * 60 * 60 * 1000;
+
             if (!isStale) {
               formattedData = json.result.list.map((c) => ({
                 asset_id: asset.id,
@@ -87,11 +91,15 @@ async function setupAndFetchHistory() {
                 timeframe: "1d",
               }));
             } else {
-              console.log(`⚠️ Bybit data for ${asset.symbol} is stale. Trying Binance...`);
+              console.log(
+                `⚠️ Bybit data for ${asset.symbol} is stale. Trying Binance...`,
+              );
               useBinance = true;
             }
           } else {
-            console.log(`⚠️ Bybit returned no valid data for ${asset.symbol}. Trying Binance...`);
+            console.log(
+              `⚠️ Bybit returned no valid data for ${asset.symbol}. Trying Binance...`,
+            );
             useBinance = true;
           }
         }
@@ -113,7 +121,9 @@ async function setupAndFetchHistory() {
               timeframe: "1d",
             }));
           } else {
-            console.error(`❌ Both Bybit and Binance failed for ${asset.symbol}`);
+            console.error(
+              `❌ Both Bybit and Binance failed for ${asset.symbol}`,
+            );
             continue;
           }
         }
@@ -145,6 +155,65 @@ async function setupAndFetchHistory() {
   } catch (err) {
     console.error("CRITICAL ERROR:", err.message);
     process.exit(1); // Beri sinyal gagal ke GitHub Actions
+  }
+}
+
+async function sendTelegramUpdate(status, message) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  const text = `${status === "success" ? "✅" : "❌"} *SYSTEM NOTIFICATION*\n\n${message}\n\n🕒 _${new Date().toLocaleString("id-ID")}_`;
+
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: text,
+        parse_mode: "Markdown",
+      }),
+    });
+  } catch (err) {
+    console.error("Gagal kirim log ke Telegram:", err.message);
+  }
+}
+
+// Update fungsi utama kamu (setupAndFetchHistory)
+async function setupAndFetchHistory() {
+  console.log("🛠️ MEMULAI PENARIKAN DATA...");
+  let successCount = 0;
+  let failCount = 0;
+
+  try {
+    // ... (Logika ambil assets kamu yang lama) ...
+
+    for (const asset of assets) {
+      // ... (Logika fetch kline Bybit kamu yang lama) ...
+
+      if (insertError) {
+        failCount++;
+      } else {
+        successCount++;
+      }
+      await delay(1000);
+    }
+
+    // KIRIM NOTIFIKASI SUKSES KE TELEGRAM
+    await sendTelegramUpdate(
+      "success",
+      `*DATABASE SYNC COMPLETE*\n` +
+        `📦 Assets Synced: ${successCount}\n` +
+        `⚠️ Failed: ${failCount}\n\n` +
+        `🚀 _Data market terbaru sudah siap di Dashboard._`,
+    );
+
+    console.log("\n🎉 SYNC SELESAI & LOG TERKIRIM!");
+  } catch (err) {
+    // KIRIM NOTIFIKASI ERROR KE TELEGRAM
+    await sendTelegramUpdate(
+      "error",
+      `*CRITICAL ERROR*\nMessage: ${err.message}`,
+    );
+    console.error("Critical System Error:", err);
   }
 }
 
