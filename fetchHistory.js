@@ -32,11 +32,11 @@ async function sendTelegramUpdate(status, message) {
   }
 }
 
-// --- 2. FUNGSI UTAMA FETCH ---
-async function setupAndFetchHistory() {
-  console.log("🛠️ MEMULAI PENARIKAN DATA...");
+const crypto = require("crypto"); // Built-in Node.js, tidak perlu install npm lagi
 
-  // INI YANG TADI HILANG: Definisi daftar koin
+async function setupAndFetchHistory() {
+  console.log("🛠️ MEMULAI PENARIKAN DATA DENGAN AUTH BYBIT...");
+
   const assets = [
     "BTCUSDT",
     "ETHUSDT",
@@ -51,59 +51,57 @@ async function setupAndFetchHistory() {
     "ZECUSDT",
     "PAXGUSDT",
   ];
+  const apiKey = process.env.BYBIT_API_KEY;
+  const apiSecret = process.env.BYBIT_API_SECRET;
 
-  let successCount = 0;
-  let failCount = 0;
+  const { data: dbAssets } = await supabase.from("assets").select("id, symbol");
+  const assetMap = new Map(dbAssets.map((a) => [a.symbol, a.id]));
 
-  try {
-    // Pastikan tabel assets di Supabase sudah sinkron dengan list di atas
-    const { data: dbAssets, error: assetError } = await supabase
-      .from("assets")
-      .select("id, symbol");
+  for (const symbol of assets) {
+    const assetId = assetMap.get(symbol);
+    if (!assetId) continue;
 
-    if (assetError || !dbAssets) {
-      throw new Error("Gagal mengambil daftar assets dari database Supabase.");
-    }
+    console.log(`⏳ Authenticated Fetching: ${symbol}...`);
 
-    const assetMap = new Map(dbAssets.map((a) => [a.symbol, a.id]));
+    // --- LOGIKA SIGNATURE BYBIT V5 ---
+    const timestamp = Date.now().toString();
+    const recvWindow = "5000";
+    const category = "spot";
+    const interval = "D";
+    const limit = "1000";
 
-    for (const symbol of assets) {
-      const assetId = assetMap.get(symbol);
-      if (!assetId) {
-        console.warn(
-          `⚠️ Skip ${symbol}: Tidak terdaftar di tabel assets Supabase.`,
-        );
-        failCount++;
-        continue;
-      }
+    // Urutan Query String harus benar untuk Signature
+    const queryString = `category=${category}&interval=${interval}&limit=${limit}&symbol=${symbol}`;
 
-      console.log(`⏳ Fetching ${symbol} (ID: ${assetId})...`);
+    // Rumus Tanda Tangan: timestamp + apiKey + recvWindow + queryString
+    const signature = crypto
+      .createHmac("sha256", apiSecret)
+      .update(timestamp + apiKey + recvWindow + queryString)
+      .digest("hex");
 
-      // Gunakan api.bytick.com (lebih tahan blokir GitHub)
-      const url = `https://api.bytick.com/v5/market/kline?category=spot&symbol=${symbol}&interval=D&limit=1000`;
+    const url = `https://api.bybit.com/v5/market/kline?${queryString}`;
 
+    try {
       const response = await fetch(url, {
+        method: "GET",
         headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-          Accept: "application/json",
+          "X-BAPI-API-KEY": apiKey,
+          "X-BAPI-SIGN": signature,
+          "X-BAPI-TIMESTAMP": timestamp,
+          "X-BAPI-RECV-WINDOW": recvWindow,
+          "User-Agent": "MingQuantOracle/1.0",
         },
       });
 
-      if (!response.ok) {
-        console.error(`❌ Error ${symbol}: HTTP ${response.status}`);
-        failCount++;
-        continue;
-      }
-
       const json = await response.json();
-      const klines = json.result?.list;
 
-      if (!klines || klines.length === 0) {
-        console.warn(`⚠️ Data ${symbol} kosong dari Bybit.`);
-        failCount++;
+      if (json.retCode !== 0) {
+        console.error(`❌ Bybit API Error ${symbol}: ${json.retMsg}`);
         continue;
       }
+
+      const klines = json.result?.list;
+      if (!klines || klines.length === 0) continue;
 
       const formatted = klines.map((k) => ({
         asset_id: assetId,
@@ -119,31 +117,13 @@ async function setupAndFetchHistory() {
         .from("market_data")
         .upsert(formatted, { onConflict: "asset_id, timestamp" });
 
-      if (upsertError) {
-        console.error(`❌ DB Error ${symbol}:`, upsertError.message);
-        failCount++;
-      } else {
-        console.log(`✅ Success: ${formatted.length} rows for ${symbol}`);
-        successCount++;
-      }
-
-      await delay(1000); // Jeda anti-spam
+      if (upsertError) console.error(`❌ DB Error: ${upsertError.message}`);
+      else console.log(`✅ Success: ${formatted.length} rows for ${symbol}`);
+    } catch (err) {
+      console.error(`💥 Error: ${err.message}`);
     }
 
-    // KIRIM NOTIFIKASI SUKSES
-    await sendTelegramUpdate(
-      "success",
-      `*DATABASE SYNC COMPLETE*\n` +
-        `📦 Assets Synced: ${successCount}\n` +
-        `⚠️ Failed/Skipped: ${failCount}\n\n` +
-        `🚀 _Data market siap diproses Backtest Engine._`,
-    );
-  } catch (err) {
-    console.error("💥 Critical System Error:", err.message);
-    await sendTelegramUpdate(
-      "error",
-      `*CRITICAL FETCH ERROR*\nMessage: ${err.message}`,
-    );
+    await new Promise((res) => setTimeout(res, 1000)); // Safety delay
   }
 }
 
