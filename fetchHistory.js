@@ -82,7 +82,7 @@ async function setupAndFetchHistory() {
       .digest("hex");
 
     // URL lengkap dengan query string
-    const url = `https://api.bybit.com/v5/market/kline?${rawQueryString}`;
+    const url = `https://api.bytick.com/v5/market/kline?${rawQueryString}`;
 
     try {
       const response = await fetch(url, {
@@ -92,10 +92,13 @@ async function setupAndFetchHistory() {
           "X-BAPI-SIGN": signature,
           "X-BAPI-TIMESTAMP": timestamp,
           "X-BAPI-RECV-WINDOW": recvWindow,
-          // Tambahkan ini agar tidak dikira bot kosongan
+          // HEADER INI SANGAT PENTING UNTUK BYPASS CLOUDFLARE
+          Connection: "keep-alive",
           "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          Accept: "application/json",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          Accept: "*/*",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Cache-Control": "no-cache",
         },
       });
 
