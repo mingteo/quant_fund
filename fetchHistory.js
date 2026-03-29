@@ -82,26 +82,15 @@ async function setupAndFetchHistory() {
       .digest("hex");
 
     // URL lengkap dengan query string
-    const url = `https://api.bytick.com/v5/market/kline?${rawQueryString}`;
+    const url = `https://api.bytick.com/v5/market/kline?category=spot&symbol=${symbol}&interval=D&limit=1000`;
 
     try {
       const response = await fetch(url, {
-        method: "GET",
         headers: {
-          "X-BAPI-API-KEY": apiKey,
-          "X-BAPI-SIGN": signature,
-          "X-BAPI-TIMESTAMP": timestamp,
-          "X-BAPI-RECV-WINDOW": recvWindow,
-          // HEADER INI SANGAT PENTING UNTUK BYPASS CLOUDFLARE
-          Connection: "keep-alive",
           "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          Accept: "*/*",
-          "Accept-Encoding": "gzip, deflate, br",
-          "Cache-Control": "no-cache",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
         },
       });
-
       // Cek apakah response-nya benar-benar JSON
       const contentType = response.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
