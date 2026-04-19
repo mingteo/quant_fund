@@ -6,6 +6,34 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY,
 );
 
+// Helper Pagination Supabase (Bypass Maksimal 1000 Baris)
+async function fetchAllSupabaseRows(table, select, eqObj, orderCol) {
+  let allData = [];
+  let from = 0;
+  const limit = 1000;
+  while (true) {
+    let query = supabase.from(table).select(select);
+    if (eqObj) {
+      for (const [key, val] of Object.entries(eqObj)) {
+        query = query.eq(key, val);
+      }
+    }
+    if (orderCol) query = query.order(orderCol, { ascending: true });
+
+    const { data, error } = await query.range(from, from + limit - 1);
+    if (error) {
+      console.error(`Error fetching ${table}:`, error.message);
+      break;
+    }
+    if (!data || data.length === 0) break;
+
+    allData = allData.concat(data);
+    if (data.length < limit) break;
+    from += limit;
+  }
+  return allData;
+}
+
 // --- 1. FUNGSI MATEMATIKA (UTILITIES) ---
 function calculateEMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1] || 0;
@@ -62,11 +90,12 @@ async function runBacktest() {
     const assetId = assetMap.get(symbol);
     if (!assetId) continue;
 
-    const { data } = await supabase
-      .from("market_data")
-      .select("timestamp, close, volume")
-      .eq("asset_id", assetId)
-      .order("timestamp", { ascending: true });
+    const data = await fetchAllSupabaseRows(
+      "market_data",
+      "timestamp, close, volume",
+      { asset_id: assetId },
+      "timestamp"
+    );
 
     marketData[symbol] = new Map(
       data.map((item) => [item.timestamp, parseFloat(item.close)]),
@@ -78,11 +107,12 @@ async function runBacktest() {
   }
 
   // B. Ambil Data Makro
-  const { data: dxyData } = await supabase
-    .from("macro_data")
-    .select("timestamp, close")
-    .eq("symbol", "DXY")
-    .order("timestamp", { ascending: true });
+  const dxyData = await fetchAllSupabaseRows(
+    "macro_data",
+    "timestamp, close",
+    { symbol: "DXY" },
+    "timestamp"
+  );
   let dxyTimeline = dxyData
     ? dxyData.map((item) => ({
         dateOnly: new Date(item.timestamp).toISOString().split("T")[0],
@@ -90,11 +120,12 @@ async function runBacktest() {
       }))
     : [];
 
-  const { data: spxData } = await supabase
-    .from("macro_data")
-    .select("timestamp, close")
-    .eq("symbol", "SPX")
-    .order("timestamp", { ascending: true });
+  const spxData = await fetchAllSupabaseRows(
+    "macro_data",
+    "timestamp, close",
+    { symbol: "SPX" },
+    "timestamp"
+  );
   let spxTimeline = spxData
     ? spxData.map((item) => ({
         dateOnly: new Date(item.timestamp).toISOString().split("T")[0],
@@ -102,11 +133,12 @@ async function runBacktest() {
       }))
     : [];
 
-  const { data: btcTimeline } = await supabase
-    .from("market_data")
-    .select("*")
-    .eq("asset_id", assetMap.get("BTCUSDT"))
-    .order("timestamp", { ascending: true });
+  const btcTimeline = await fetchAllSupabaseRows(
+    "market_data",
+    "*",
+    { asset_id: assetMap.get("BTCUSDT") },
+    "timestamp"
+  );
 
   if (!btcTimeline || btcTimeline.length < 200) {
     console.error(
@@ -267,7 +299,8 @@ async function runBacktest() {
 
       if (prices.length < 50 || vols.length < 50) continue;
 
-      const currentP = prices[prices.length - 1];
+      const currentP = marketData[symbol]?.get(todayStr);
+      if (!currentP) continue; // Lewati koin ini jika harganya tidak ada, jangan hentikan seluruh sistem
       const sma50 = calculateSMA(prices, 50);
       const distanceToSma50 = ((currentP - sma50) / sma50) * 100;
 
