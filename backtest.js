@@ -160,52 +160,87 @@ async function runBacktest() {
     }
     let currentPortfolioValue = capitalUSDT + currentCryptoValue;
 
-    // TAHAP 2: KOMPAS MAKRO & EXPOSURE
+    // =========================================================
+    // TAHAP 2: SMART REGIME & EXPOSURE (QUANTITATIVE CONTRARIAN)
+    // =========================================================
     const btcEma20 = calculateEMA(btcPrices.slice(-100), 20);
     const btcEma50 = calculateEMA(btcPrices.slice(-100), 50);
-    const trendDirection = btcEma20 > btcEma50 ? "BULLISH" : "BEARISH";
-    const regime =
-      Math.abs((btcEma20 - btcEma50) / btcEma50) * 100 < 2 ? "MR" : "TREND";
-    const mayer = currentBTCPrice / calculateSMA(btcPrices, 200);
+    const trendDirection = btcEma20 > btcEma50 ? "UPTREND" : "DOWNTREND";
+    const btcRoc14 = calculateROC(btcPrices, 14); // Kecepatan pergerakan harga
+    const btcSma200 = calculateSMA(btcPrices, 200);
+    const mayer = currentBTCPrice / btcSma200;
 
     let targetExposure = 0;
-    if (trendDirection === "BULLISH") {
-      if (mayer < 1.1) targetExposure = 0.9;
-      else if (mayer < 1.7) targetExposure = 0.7;
-      else if (mayer < 2.4) targetExposure = 0.4;
-      else targetExposure = 0.1;
-    } else {
-      targetExposure = regime === "MR" ? 0.2 : 0.0;
+    let regimeStatus = "";
+
+    // 1. Model Akumulasi Contrarian berbasis Deviasi Historis (Mayer)
+    if (mayer < 0.75) {
+      // EXTREME FEAR / DEEP DISCOUNT
+      // Harga hancur jauh di bawah SMA 200. Smart money beraksi di sini.
+      // Syarat perlindungan: Beli agresif HANYA JIKA harga tidak sedang terjun bebas (ROC > -15)
+      targetExposure = btcRoc14 > -15 ? 1.0 : 0.5;
+      regimeStatus = "ACCUMULATION (DEEP DISCOUNT)";
+    } else if (mayer >= 0.75 && mayer < 1.2) {
+      // FAIR VALUE / EARLY RECOVERY
+      targetExposure = 0.8;
+      regimeStatus = "RECOVERY / FAIR VALUE";
+    } else if (mayer >= 1.2 && mayer < 2.0) {
+      // BULL MARKET ONGOING
+      // Harga sudah naik di atas rata-rata. Kita mulai kurangi paparan risiko perlahan.
+      targetExposure = 0.6;
+      regimeStatus = "MARKUP (BULLISH)";
+    } else if (mayer >= 2.0) {
+      // OVERVALUED / EUPHORIA
+      // Ritel FOMO, sistem kita mengamankan profit dan hanya menyisakan sedikit posisi.
+      targetExposure = 0.2;
+      regimeStatus = "DISTRIBUTION (OVERVALUED)";
     }
 
+    // 2. The Smart Kill-Switch (Korelasi DXY & Momentum Crash)
     let alerts = [];
     const availableDXY = dxyTimeline
       .filter((d) => d.dateOnly <= dateOnly)
       .map((d) => d.close);
+
     if (availableDXY.length > 50) {
-      if (
-        calculateEMA(availableDXY.slice(-100), 20) >
-        calculateEMA(availableDXY.slice(-100), 50)
-      ) {
-        targetExposure *= 0.5;
-        alerts.push("DXY UPTREND");
+      const dxyEma20 = calculateEMA(availableDXY.slice(-100), 20);
+      const dxyEma50 = calculateEMA(availableDXY.slice(-100), 50);
+      const dxyRoc14 = calculateROC(availableDXY, 14);
+
+      // LOGIKA KILL-SWITCH: DXY meroket tajam DAN Bitcoin kehilangan momentum (darah tumpah)
+      if (dxyEma20 > dxyEma50 && dxyRoc14 > 2 && btcRoc14 < -10) {
+        targetExposure = 0.0; // 100% CASH. Tarik semua pasukan dari pasar.
+        regimeStatus = "CRITICAL MACRO RISK (100% CASH)";
+        alerts.push("DXY SPIKE + BTC CRASH DETECTED");
       }
     }
 
-    // TAHAP 3: RANKING MOMENTUM
+    // =========================================================
+    // TAHAP 3: RANKING MOMENTUM & ROTASI SEKTORAL PRESISI
+    // =========================================================
     let dailyMomentum = [];
     for (const symbol of targetCoins) {
       const prices = getPricesUpToToday(symbol);
       if (prices.length < 50) continue;
-      const isUptrend =
-        calculateEMA(prices.slice(-100), 20) >
-        calculateEMA(prices.slice(-100), 50);
-      const roc14 = calculateROC(prices, 14);
-      if (isUptrend && roc14 > 0) {
-        dailyMomentum.push({ symbol, momentum: roc14 });
+
+      const currentP = prices[prices.length - 1];
+      const sma50 = calculateSMA(prices, 50);
+      const distanceToSma50 = ((currentP - sma50) / sma50) * 100; // Seberapa jauh harga memompa
+
+      const roc14 = calculateROC(prices, 14); // Momentum pendek
+      const roc30 = calculateROC(prices, 30); // Momentum menengah
+
+      // Filter Anti-Pucuk: Koin harus mulai naik (ROC14 > 0),
+      // TAPI harganya belum overextended (maksimal 40% di atas SMA50)
+      if (roc14 > 0 && distanceToSma50 < 40) {
+        // Quant Scoring: Kombinasi kekuatan jangka pendek dan menengah
+        const quantScore = roc14 * 0.6 + roc30 * 0.4;
+        dailyMomentum.push({ symbol, quantScore });
       }
     }
-    dailyMomentum.sort((a, b) => b.momentum - a.momentum);
+
+    // Eksekusi: Ambil maksimal 3 Koin dengan skor kuantitatif tertinggi
+    dailyMomentum.sort((a, b) => b.quantScore - a.quantScore);
     const topSymbols = dailyMomentum.slice(0, 3).map((c) => c.symbol);
 
     // TAHAP 4: REBALANCING
@@ -252,7 +287,7 @@ async function runBacktest() {
       console.log(`\n=========================================`);
       console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE`);
       console.log(
-        `📈 Market: ${regime} (${trendDirection}) | Mayer: ${mayer.toFixed(2)}x`,
+        `📈 Market: ${regimeStatus} (${trendDirection}) | Mayer: ${mayer.toFixed(2)}x`,
       );
       console.log(
         `🔄 Aksi  : ${actionLog.join(", ")} | Exp: ${(targetExposure * 100).toFixed(0)}%`,
