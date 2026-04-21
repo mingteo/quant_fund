@@ -185,6 +185,7 @@ async function runBacktest() {
   let dailyRecords = [];
   let totalTrades = 0;
   let lastLoggedAsset = "USDT";
+  let tradeHistoryRecords = []; // <--- TAMBAHKAN INI: Wadah untuk data transaksi
 
   const startIdx = 200;
   const startBTCPrice =
@@ -441,6 +442,30 @@ async function runBacktest() {
           holdings[symbol],
         );
 
+        // --- TAMBAHKAN LOGIKA RECORD TRADE (SELL) DI SINI ---
+        if (sellQty > 0) {
+          let avgPrice = 0;
+          let pnl_percent = 0;
+          let pnl_value = 0; // <--- Tambahkan variabel ini
+          if (holdings[symbol] > 0) {
+            avgPrice = costBasis[symbol] / holdings[symbol];
+            pnl_percent = ((currentPrice - avgPrice) / avgPrice) * 100;
+            pnl_value = (currentPrice - avgPrice) * sellQty; // <--- Kalkulasi Nominal USDT
+          }
+
+          tradeHistoryRecords.push({
+            symbol: symbol,
+            type: "SELL",
+            entry_price: avgPrice,
+            exit_price: currentPrice,
+            amount: sellQty,
+            pnl_percent: pnl_percent,
+            pnl_value: pnl_value, // <--- Simpan ke database
+            timestamp: new Date(todayStr).toISOString(),
+          });
+        }
+        // ---------------------------------------------------
+
         if (holdings[symbol] > 0) {
           const ratio = sellQty / holdings[symbol];
           costBasis[symbol] -= costBasis[symbol] * ratio;
@@ -467,9 +492,23 @@ async function runBacktest() {
         const buyAmount = Math.min(diff, capitalUSDT);
 
         if (buyAmount > 10) {
+          const buyQty = buyAmount / currentPrice; // Dapatkan jumlah koin yang dibeli
+
+          // --- TAMBAHKAN LOGIKA RECORD TRADE (BUY) DI SINI ---
+          tradeHistoryRecords.push({
+            symbol: symbol,
+            type: "BUY",
+            entry_price: currentPrice,
+            exit_price: currentPrice,
+            amount: buyQty,
+            pnl_percent: 0,
+            timestamp: new Date(todayStr).toISOString(),
+          });
+          // --------------------------------------------------
+
           // Lewati debu transaksi (dust)
           capitalUSDT -= buyAmount;
-          holdings[symbol] += buyAmount / currentPrice;
+          holdings[symbol] += buyQty; // Diperbaiki: gunakan buyQty agar lebih rapi
           costBasis[symbol] += buyAmount;
           actionLog.push(`+${symbol.replace("USDT", "")}`);
           dayHasTrades = true;
@@ -553,6 +592,21 @@ async function runBacktest() {
       .upsert(chunk, { onConflict: "date" });
   }
 
+  // --- TAMBAHKAN PROSES PENYIMPANAN TRADE HISTORY DI SINI ---
+  console.log(
+    `📝 Menyimpan ${tradeHistoryRecords.length} riwayat transaksi backtest...`,
+  );
+  // (Opsional) Hapus riwayat lama agar tidak menumpuk saat Anda merun backtest berkali-kali
+  await supabase.from("trade_history").delete().neq("symbol", "DUMMY");
+
+  const tradeChunkSize = 500;
+  for (let i = 0; i < tradeHistoryRecords.length; i += tradeChunkSize) {
+    const chunk = tradeHistoryRecords.slice(i, i + tradeChunkSize);
+    const { error } = await supabase.from("trade_history").insert(chunk);
+    if (error) console.error("Error insert trade history:", error.message);
+  }
+  // ---------------------------------------------------------
+
   // B. Simpan Rincian Posisi Terakhir
   await supabase.from("current_positions").delete().neq("symbol", "DUMMY");
   const lastRecord = dailyRecords[dailyRecords.length - 1];
@@ -577,6 +631,7 @@ async function runBacktest() {
         symbol: symbol.replace("USDT", ""),
         percentage: pct.toFixed(2),
         avg_price: (costBasis[symbol] / holdings[symbol]).toFixed(4),
+        amount: holdings[symbol].toFixed(6),
       });
   }
   await supabase.from("current_positions").insert(finalPositions);
