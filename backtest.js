@@ -184,6 +184,7 @@ async function runBacktest() {
   let maxDrawdown = 0;
   let dailyRecords = [];
   let totalTrades = 0;
+  let lastLoggedAsset = "USDT";
 
   const startIdx = 200;
   const startBTCPrice =
