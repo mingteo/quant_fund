@@ -94,7 +94,7 @@ async function runBacktest() {
       "market_data",
       "timestamp, close, volume",
       { asset_id: assetId },
-      "timestamp"
+      "timestamp",
     );
 
     marketData[symbol] = new Map(
@@ -111,7 +111,7 @@ async function runBacktest() {
     "macro_data",
     "timestamp, close",
     { symbol: "DXY" },
-    "timestamp"
+    "timestamp",
   );
   let dxyTimeline = dxyData
     ? dxyData.map((item) => ({
@@ -124,7 +124,7 @@ async function runBacktest() {
     "macro_data",
     "timestamp, close",
     { symbol: "SPX" },
-    "timestamp"
+    "timestamp",
   );
   let spxTimeline = spxData
     ? spxData.map((item) => ({
@@ -137,7 +137,7 @@ async function runBacktest() {
     "market_data",
     "*",
     { asset_id: assetMap.get("BTCUSDT") },
-    "timestamp"
+    "timestamp",
   );
 
   if (!btcTimeline || btcTimeline.length < 200) {
