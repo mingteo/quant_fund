@@ -7,6 +7,21 @@ const supabase = createClient(
 );
 const CC_API_KEY = process.env.CC_API_KEY;
 
+// Contoh logika sederhana untuk mencatat penjualan
+async function recordTrade(symbol, type, price, amount, pnl = 0) {
+  const { data, error } = await supabase.from("trade_history").insert([
+    {
+      symbol: symbol,
+      type: type,
+      exit_price: price,
+      amount: amount,
+      pnl_percent: pnl,
+      timestamp: new Date().toISOString(),
+    },
+  ]);
+  if (error) console.error("Gagal mencatat audit:", error);
+}
+
 async function setupAndFetchHistory() {
   console.log("🛠️ MEMULAI PENARIKAN DATA VIA CRYPTOCOMPARE...");
 
