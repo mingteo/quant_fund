@@ -16,7 +16,7 @@ async function recordTrade(symbol, type, price, amount, pnl = 0) {
       exit_price: price,
       amount: amount,
       pnl_percent: pnl,
-      timestamp: new Date().toISOString(),
+      timestamp: executionTime,
     },
   ]);
   if (error) console.error("Gagal mencatat audit:", error);
