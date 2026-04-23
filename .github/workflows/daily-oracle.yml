@@ -25,8 +25,9 @@ jobs:
       - name: 🌐 Fetch Market History (Spot)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          # MENGGUNAKAN SERVICE ROLE KEY UNTUK BACKEND
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CC_API_KEY: ${{ secrets.CC_API_KEY }}
           BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
           BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
@@ -42,9 +43,13 @@ jobs:
           node fetchMacro.js
           node fetchDerivatives.js
 
-      # ❌ STEP "Run Backtest Engine" TELAH DIHAPUS TOTAL DARI SINI ❌
+      - name: ⚙️ Run Backtest Engine
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node backtest.js
 
-      - name: 🤖 Execute Live Rebalancing & Broadcast
+      - name: 🤖 Broadcast to Telegram Oracle
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
