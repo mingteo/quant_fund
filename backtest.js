@@ -461,7 +461,7 @@ async function runBacktest() {
             amount: sellQty,
             pnl_percent: pnl_percent,
             pnl_value: pnl_value, // <--- Simpan ke database
-            timestamp: new Date(todayStr).toISOString(),
+            timestamp: executionTime,
           });
         }
         // ---------------------------------------------------
