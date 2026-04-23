@@ -453,7 +453,7 @@ async function runBacktest() {
             pnl_value = (currentPrice - avgPrice) * sellQty; // <--- Kalkulasi Nominal USDT
           }
 
-          const executionTime = new Date().toISOString();
+          const executionTime = new Date(todayStr + "T17:00:00").toISOString();
 
           tradeHistoryRecords.push({
             symbol: symbol,
