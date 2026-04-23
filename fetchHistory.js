@@ -146,9 +146,7 @@ async function executeLiveRebalancing(
       );
 
       if (sellQty > 0) {
-        let sellDate = new Date(todayStr);
-        sellDate.setUTCHours(10, 0, 0, 0);
-        const liveSellTime = sellDate.toISOString();
+        const liveSellTime = new Date(serverTimeMs).toISOString(); // Waktu Real-Time
         await recordTrade(
           symbol,
           "SELL",
@@ -179,9 +177,9 @@ async function executeLiveRebalancing(
         // Abaikan dust transaction di bawah $10
         const buyQty = buyAmount / currentPrice;
 
-        let buyDate = new Date(todayStr);
-        buyDate.setUTCHours(10, 20, 0, 0);
-        const liveBuyTime = buyDate.toISOString();
+        // TIMESTAMP FIX 2: Tambah 1.5 detik agar BUY selalu tercatat SETELAH SELL di database
+        const delayMs = isSellExecuted ? 1500 : 0;
+        const liveBuyTime = new Date(serverTimeMs + delayMs).toISOString();
 
         await recordTrade(symbol, "BUY", currentPrice, buyQty, 0, liveBuyTime);
       }
