@@ -442,18 +442,23 @@ async function runBacktest() {
           holdings[symbol],
         );
 
-        // --- TAMBAHKAN LOGIKA RECORD TRADE (SELL) DI SINI ---
+        // Di dalam FASE 1: EKSEKUSI SELL
         if (sellQty > 0) {
           let avgPrice = 0;
           let pnl_percent = 0;
-          let pnl_value = 0; // <--- Tambahkan variabel ini
+          let pnl_value = 0;
+
           if (holdings[symbol] > 0) {
             avgPrice = costBasis[symbol] / holdings[symbol];
             pnl_percent = ((currentPrice - avgPrice) / avgPrice) * 100;
-            pnl_value = (currentPrice - avgPrice) * sellQty; // <--- Kalkulasi Nominal USDT
+            pnl_value = (currentPrice - avgPrice) * sellQty;
           }
 
-          const executionTime = new Date().toISOString();
+          // Buat waktu buatan berbasis histori: Waktu Candle + 10 Menit
+          const historyBaseTime = new Date(todayStr).getTime();
+          const simulatedSellTime = new Date(
+            historyBaseTime + 10 * 60000,
+          ).toISOString(); // Waktu Candle + 10 menit
 
           tradeHistoryRecords.push({
             symbol: symbol,
@@ -463,7 +468,7 @@ async function runBacktest() {
             amount: sellQty,
             pnl_percent: pnl_percent,
             pnl_value: pnl_value,
-            timestamp: executionTime,
+            timestamp: simulatedSellTime, // <--- Gunakan Waktu Histori Buatan Ini
           });
         }
         // ---------------------------------------------------
@@ -493,10 +498,15 @@ async function runBacktest() {
         // SAFETY CLAMP 2: Jangan beli melebihi USDT riil yang ada di dompet!
         const buyAmount = Math.min(diff, capitalUSDT);
 
+        // Di dalam FASE 2: EKSEKUSI BUY
         if (buyAmount > 10) {
-          const buyQty = buyAmount / currentPrice; // Dapatkan jumlah koin yang dibeli
+          const buyQty = buyAmount / currentPrice;
 
-          // --- TAMBAHKAN LOGIKA RECORD TRADE (BUY) DI SINI ---
+          // Buat waktu buatan berbasis histori: Waktu Candle + 20 Menit
+          const simulatedBuyTime = new Date(
+            historyBaseTime + 20 * 60000,
+          ).toISOString(); // Waktu Candle + 20 menit
+
           tradeHistoryRecords.push({
             symbol: symbol,
             type: "BUY",
@@ -504,8 +514,10 @@ async function runBacktest() {
             exit_price: currentPrice,
             amount: buyQty,
             pnl_percent: 0,
-            timestamp: new Date(todayStr).toISOString(),
+            pnl_value: 0,
+            timestamp: simulatedBuyTime, // <--- Gunakan Waktu Histori Buatan Ini
           });
+
           // --------------------------------------------------
 
           // Lewati debu transaksi (dust)
