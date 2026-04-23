@@ -453,6 +453,8 @@ async function runBacktest() {
             pnl_value = (currentPrice - avgPrice) * sellQty; // <--- Kalkulasi Nominal USDT
           }
 
+          const executionTime = new Date().toISOString();
+
           tradeHistoryRecords.push({
             symbol: symbol,
             type: "SELL",
@@ -460,8 +462,8 @@ async function runBacktest() {
             exit_price: currentPrice,
             amount: sellQty,
             pnl_percent: pnl_percent,
-            pnl_value: pnl_value, // <--- Simpan ke database
-            timestamp: new Date(todayStr).toISOString(),
+            pnl_value: pnl_value,
+            timestamp: executionTime,
           });
         }
         // ---------------------------------------------------
