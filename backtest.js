@@ -455,10 +455,9 @@ async function runBacktest() {
           }
 
           // Buat waktu buatan berbasis histori: Waktu Candle + 10 Menit
-          const historyBaseTime = new Date(todayStr).getTime();
-          const simulatedSellTime = new Date(
-            historyBaseTime + 10 * 60000,
-          ).toISOString(); // Waktu Candle + 10 menit
+          let sellDate = new Date(todayStr);
+          sellDate.setUTCHours(10, 0, 0, 0);
+          const simulatedSellTime = sellDate.toISOString();
 
           tradeHistoryRecords.push({
             symbol: symbol,
@@ -503,9 +502,9 @@ async function runBacktest() {
           const buyQty = buyAmount / currentPrice;
 
           // Buat waktu buatan berbasis histori: Waktu Candle + 20 Menit
-          const simulatedBuyTime = new Date(
-            historyBaseTime + 20 * 60000,
-          ).toISOString(); // Waktu Candle + 20 menit
+          let buyDate = new Date(todayStr);
+          buyDate.setUTCHours(10, 20, 0, 0);
+          const simulatedBuyTime = buyDate.toISOString();
 
           tradeHistoryRecords.push({
             symbol: symbol,

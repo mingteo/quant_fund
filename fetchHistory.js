@@ -146,11 +146,7 @@ async function executeLiveRebalancing(
       );
 
       if (sellQty > 0) {
-        const pnl_percent = 0; // Anda bisa mengkalkulasi PnL berdasarkan avg_price riil di sini
-
-        // TIMESTAMP FIX 1: Gunakan waktu server detik ini persis
-        const liveSellTime = new Date(serverTimeMs).toISOString();
-
+        const liveSellTime = new Date(serverTimeMs).toISOString(); // Waktu Real-Time
         await recordTrade(
           symbol,
           "SELL",
