@@ -46,6 +46,7 @@ jobs:
 
       - name: 🤖 Execute Live Rebalancing & Broadcast
         env:
+          TZ: "Asia/Jakarta"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

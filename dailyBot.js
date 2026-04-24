@@ -92,7 +92,7 @@ async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
   const exposureBar = "🟩".repeat(filledBoxes) + "⬜".repeat(10 - filledBoxes);
 
   let message = `🏛 *QUANT ORACLE TERMINAL*\n`;
-  message += `_Daily Execution: ${new Date().toLocaleString("id-ID")}_\n\n`;
+  message += `_Daily Execution: ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB_\n\n`;
   message += `🌐 *MACRO REGIME*\nStatus: _${regimeStatus}_\n\n`;
   message += `🛡️ *SYSTEM EXPOSURE*\n[${exposureBar}] *${cryptoExposurePct}%*\n`;
   message += `• Crypto Assets: *$${cryptoVal.toLocaleString(undefined, { minimumFractionDigits: 2 })}*\n`;
@@ -470,7 +470,9 @@ async function runDailyOracle() {
       100
     ).toFixed(2); // SPX Kini Dinamis
 
-    const todayOnly = new Date().toISOString().split("T")[0];
+    const todayOnly = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Jakarta",
+    }).format(new Date());
     await supabase.from("portfolio_history").upsert(
       [
         {
