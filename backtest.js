@@ -3,7 +3,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
 );
 
 // Helper Pagination Supabase (Bypass Maksimal 1000 Baris)
@@ -14,9 +14,8 @@ async function fetchAllSupabaseRows(table, select, eqObj, orderCol) {
   while (true) {
     let query = supabase.from(table).select(select);
     if (eqObj) {
-      for (const [key, val] of Object.entries(eqObj)) {
+      for (const [key, val] of Object.entries(eqObj))
         query = query.eq(key, val);
-      }
     }
     if (orderCol) query = query.order(orderCol, { ascending: true });
 
@@ -39,9 +38,7 @@ function calculateEMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1] || 0;
   const k = 2 / (period + 1);
   let ema = prices[0];
-  for (let i = 1; i < prices.length; i++) {
-    ema = prices[i] * k + ema * (1 - k);
-  }
+  for (let i = 1; i < prices.length; i++) ema = prices[i] * k + ema * (1 - k);
   return ema;
 }
 
@@ -59,7 +56,7 @@ function calculateROC(prices, period) {
 
 // --- 2. ENGINE BACKTEST UTAMA ---
 async function runBacktest() {
-  console.log("🚀 MEMULAI BACKTEST: VERSI QUANT BALANCED (GOLD)...");
+  console.log("🚀 MEMULAI BACKTEST: VERSI QUANT GOLD (HYSTERESIS & LOGS)...");
 
   const targetCoins = [
     "BTCUSDT",
@@ -89,24 +86,21 @@ async function runBacktest() {
   for (const symbol of targetCoins) {
     const assetId = assetMap.get(symbol);
     if (!assetId) continue;
-
     const data = await fetchAllSupabaseRows(
       "market_data",
       "timestamp, close, volume",
       { asset_id: assetId },
       "timestamp",
     );
-
     marketData[symbol] = new Map(
       data.map((item) => [item.timestamp, parseFloat(item.close)]),
     );
-
     marketVolume[symbol] = new Map(
       data.map((item) => [item.timestamp, parseFloat(item.volume)]),
     );
   }
 
-  // B. Ambil Data Makro
+  // B. Ambil Data Makro & Derivatives
   const dxyData = await fetchAllSupabaseRows(
     "macro_data",
     "timestamp, close",
@@ -144,21 +138,16 @@ async function runBacktest() {
     console.error(
       "❌ ABORT: Data Market tidak cukup untuk Backtest (Butuh min 200 hari).",
     );
-    console.log(
-      "Saran: Pastikan fetchHistory.js berhasil mengisi market_data terlebih dahulu.",
-    );
-    return; // Hentikan script dengan sopan, bukan dengan error pecah
+    return;
   }
 
   const { data: oiData } = await supabase
     .from("derivatives_data")
     .select("symbol, open_interest, timestamp")
     .order("timestamp", { ascending: true });
-
   let derivativesTimeline = {};
   if (oiData) {
     oiData.forEach((row) => {
-      // Pastikan format symbol sama (misal: "BTCUSDT")
       const sym = row.symbol;
       if (!derivativesTimeline[sym]) derivativesTimeline[sym] = [];
       derivativesTimeline[sym].push({
@@ -167,8 +156,6 @@ async function runBacktest() {
       });
     });
   }
-
-  const startDate = btcTimeline[0].timestamp;
 
   // C. Inisialisasi Portofolio
   let capitalUSDT = 10000;
@@ -180,12 +167,12 @@ async function runBacktest() {
     costBasis[coin] = 0;
     athPrices[coin] = 0;
   });
+
   let peakValue = 10000;
   let maxDrawdown = 0;
   let dailyRecords = [];
+  let tradeHistoryRecords = [];
   let totalTrades = 0;
-  let lastLoggedAsset = "USDT";
-  let tradeHistoryRecords = []; // <--- TAMBAHKAN INI: Wadah untuk data transaksi
 
   const startIdx = 200;
   const startBTCPrice =
@@ -216,74 +203,56 @@ async function runBacktest() {
     if (btcPrices.length < 200) continue;
     const currentBTCPrice = btcPrices[btcPrices.length - 1];
 
-    // TAHAP 1: HITUNG TOTAL EQUITY
     let currentCryptoValue = 0;
     for (const symbol of targetCoins) {
-      const p = marketData[symbol]?.get(todayStr) || 0;
-      currentCryptoValue += holdings[symbol] * p;
+      currentCryptoValue +=
+        holdings[symbol] * (marketData[symbol]?.get(todayStr) || 0);
     }
     let currentPortfolioValue = capitalUSDT + currentCryptoValue;
 
     // =========================================================
-    // TAHAP 2: SMART REGIME & EXPOSURE (QUANTITATIVE CONTRARIAN)
+    // TAHAP 1: SMART REGIME & EXPOSURE (QUANTITATIVE CONTRARIAN)
     // =========================================================
     const btcEma20 = calculateEMA(btcPrices.slice(-100), 20);
     const btcEma50 = calculateEMA(btcPrices.slice(-100), 50);
     const trendDirection = btcEma20 > btcEma50 ? "UPTREND" : "DOWNTREND";
-    const btcRoc14 = calculateROC(btcPrices, 14); // Kecepatan pergerakan harga
+    const btcRoc14 = calculateROC(btcPrices, 14);
     const btcSma200 = calculateSMA(btcPrices, 200);
     const mayer = currentBTCPrice / btcSma200;
 
     let targetExposure = 0;
     let regimeStatus = "";
 
-    // 1. Model Akumulasi Contrarian berbasis Deviasi Historis (Mayer)
     if (mayer < 0.75) {
-      // EXTREME FEAR / DEEP DISCOUNT
-      // Harga hancur jauh di bawah SMA 200. Smart money beraksi di sini.
-      // Syarat perlindungan: Beli agresif HANYA JIKA harga tidak sedang terjun bebas (ROC > -15)
       targetExposure = btcRoc14 > -15 ? 1.0 : 0.5;
       regimeStatus = "ACCUMULATION (DEEP DISCOUNT)";
     } else if (mayer >= 0.75 && mayer < 1.2) {
-      // FAIR VALUE / EARLY RECOVERY
       targetExposure = 0.8;
       regimeStatus = "RECOVERY / FAIR VALUE";
     } else if (mayer >= 1.2 && mayer < 2.0) {
-      // BULL MARKET ONGOING
-      // Harga sudah naik di atas rata-rata. Kita mulai kurangi paparan risiko perlahan.
       targetExposure = 0.6;
       regimeStatus = "MARKUP (BULLISH)";
-    } else if (mayer >= 2.0) {
-      // OVERVALUED / EUPHORIA
-      // Ritel FOMO, sistem kita mengamankan profit dan hanya menyisakan sedikit posisi.
+    } else {
       targetExposure = 0.2;
       regimeStatus = "DISTRIBUTION (OVERVALUED)";
     }
 
-    // 2. The Smart Kill-Switch (Korelasi DXY & Momentum Crash)
-    let alerts = [];
     const availableDXY = dxyTimeline
       .filter((d) => d.dateOnly <= dateOnly)
       .map((d) => d.close);
-
     if (availableDXY.length > 50) {
       const dxyEma20 = calculateEMA(availableDXY.slice(-100), 20);
       const dxyEma50 = calculateEMA(availableDXY.slice(-100), 50);
       const dxyRoc14 = calculateROC(availableDXY, 14);
-
-      // LOGIKA KILL-SWITCH: DXY meroket tajam DAN Bitcoin kehilangan momentum (darah tumpah)
       if (dxyEma20 > dxyEma50 && dxyRoc14 > 2 && btcRoc14 < -10) {
-        targetExposure = 0.0; // 100% CASH. Tarik semua pasukan dari pasar.
+        targetExposure = 0.0;
         regimeStatus = "CRITICAL MACRO RISK (100% CASH)";
-        alerts.push("DXY SPIKE + BTC CRASH DETECTED");
       }
     }
 
     // =========================================================
-    // TAHAP 3: RANKING MOMENTUM & ROTASI SEKTORAL PRESISI
+    // TAHAP 2: RANKING MOMENTUM & ROTASI SEKTORAL
     // =========================================================
-
-    // Helper untuk menarik array volume sejajar dengan timeline
     const getVolumesUpToToday = (symbol) => {
       let vols = [];
       for (let j = 0; j <= i; j++) {
@@ -298,119 +267,87 @@ async function runBacktest() {
     for (const symbol of targetCoins) {
       const prices = getPricesUpToToday(symbol);
       const vols = getVolumesUpToToday(symbol);
-
       if (prices.length < 50 || vols.length < 50) continue;
 
       const currentP = marketData[symbol]?.get(todayStr);
-      if (!currentP) continue; // Lewati koin ini jika harganya tidak ada, jangan hentikan seluruh sistem
+      if (!currentP) continue;
+
       const sma50 = calculateSMA(prices, 50);
       const distanceToSma50 = ((currentP - sma50) / sma50) * 100;
-
       const roc14 = calculateROC(prices, 14);
       const roc30 = calculateROC(prices, 30);
 
-      // Gatekeeper: Harus uptrend ringan, tidak boleh pucuk
       if (roc14 > 0 && distanceToSma50 < 40) {
-        // 🚨 RADAR SMART MONEY: Deteksi Anomali Volume
         const currentVol = vols[vols.length - 1];
-        const avgVol20 = calculateSMA(vols.slice(-20), 20); // Rata-rata volume 20 hari terakhir
+        const avgVol20 = calculateSMA(vols.slice(-20), 20);
 
         let smartMoneyMultiplier = 1.0;
-
-        // Jika volume hari ini 1.5x lipat dari rata-rata (Lonjakan 50%)
-        if (currentVol > avgVol20 * 1.5) {
-          smartMoneyMultiplier = 1.5; // Beri bobot ekstra 50% pada skor
-        }
-        // Jika volume meledak lebih dari 2.5x lipat (Whale masuk skala masif)
-        else if (currentVol > avgVol20 * 2.5) {
-          smartMoneyMultiplier = 2.0; // Beri bobot ganda! Sistem akan agresif masuk ke koin ini
-        }
+        if (currentVol > avgVol20 * 2.5) smartMoneyMultiplier = 2.0;
+        else if (currentVol > avgVol20 * 1.5) smartMoneyMultiplier = 1.5;
 
         let oiMultiplier = 1.0;
         const availableOI =
           derivativesTimeline[symbol]
             ?.filter((d) => d.dateOnly <= dateOnly)
             .map((d) => d.oi) || [];
-
-        // Hanya hitung jika kita punya histori OI setidaknya 5 hari ke belakang
         if (availableOI.length >= 5) {
           const currentOI = availableOI[availableOI.length - 1];
           const pastOI = availableOI[availableOI.length - 5];
           const oiChange = ((currentOI - pastOI) / pastOI) * 100;
 
-          if (oiChange > 15 && distanceToSma50 < 20) {
-            // WHALE ACCUMULATION: OI naik drastis >15% tapi harga masih di bawah/sideways
-            oiMultiplier = 1.5; // Beri sinyal beli super kuat!
-          } else if (oiChange < -10) {
-            // WHALE DISTRIBUTION: OI anjlok >10% (Whale tutup posisi massal)
-            oiMultiplier = 0.1; // Matikan skor koin ini, bahaya dump mengintai!
-          }
+          if (oiChange > 15 && distanceToSma50 < 20) oiMultiplier = 1.5;
+          else if (oiChange < -10) oiMultiplier = 0.1;
         }
 
-        // Kalkulasi Quant Score Akhir (Momentum x Volume x Open Interest)
         const baseScore = roc14 * 0.6 + roc30 * 0.4;
-
         if (baseScore > 0) {
-          // Pengganda gabungan akan membuat koin dengan sinyal on-chain terkuat mendominasi portofolio
-          const finalQuantScore =
-            baseScore * smartMoneyMultiplier * oiMultiplier;
-          dailyMomentum.push({ symbol, finalQuantScore });
+          dailyMomentum.push({
+            symbol,
+            finalQuantScore: baseScore * smartMoneyMultiplier * oiMultiplier,
+          });
         }
       }
     }
 
-    // Eksekusi: Ambil maksimal 3 Koin dengan skor kuantitatif tertinggi
-    dailyMomentum.sort((a, b) => b.finalQuantScore - a.finalQuantScore);
-    const topSymbols = dailyMomentum.slice(0, 3).map((c) => c.symbol);
-
-    let actionLog = [];
-
     // =========================================================
-    // TAHAP 3.5: THE PROFIT LOCKER (DYNAMIC TRAILING STOP-LOSS)
+    // TAHAP 3: THE PROFIT LOCKER (TRAILING STOP)
     // =========================================================
-    // Parameter: Berapa % harga boleh turun dari pucuk lokal sebelum cut-loss/take-profit paksa?
-    const trailingStopTolerance = 0.15; // Setelan 15% (bisa disesuaikan dengan agresivitasmu)
+    const trailingStopTolerance = 0.15;
     let emergencySells = [];
+    let actionLog = [];
 
     for (const symbol of targetCoins) {
       if (holdings[symbol] > 0) {
         const currentPrice = marketData[symbol]?.get(todayStr);
+        if (currentPrice > athPrices[symbol]) athPrices[symbol] = currentPrice;
 
-        // 1. Update Rekor Harga Tertinggi (ATH) Lokal selama memegang barang
-        if (currentPrice > athPrices[symbol]) {
-          athPrices[symbol] = currentPrice;
-        }
-
-        // 2. Cek apakah harga jatuh melewati batas toleransi dari ATH lokal
         const dropFromAth =
           (athPrices[symbol] - currentPrice) / athPrices[symbol];
         if (dropFromAth >= trailingStopTolerance) {
           emergencySells.push(symbol);
           actionLog.push(`🚨 TS-TRIGGER: ${symbol.replace("USDT", "")}`);
-          athPrices[symbol] = 0; // Reset memori ATH karena kita akan membuang barangnya
+          athPrices[symbol] = 0;
         }
       } else {
-        athPrices[symbol] = 0; // Pastikan reset ke 0 jika kita sedang tidak memegang barangnya
+        athPrices[symbol] = 0;
       }
     }
 
     // =========================================================
-    // TAHAP 4: ASYMMETRIC REBALANCING (SAFETY FIRST)
+    // TAHAP 4: ASYMMETRIC REBALANCING (WITH HYSTERESIS)
     // =========================================================
     const totalCryptoBudget = currentPortfolioValue * targetExposure;
+    const rebalanceThreshold = currentPortfolioValue * 0.05; // 🛡️ HYSTERESIS 5%
     let dayHasTrades = false;
 
-    // 1. Reset target
     let targetValues = {};
     targetCoins.forEach((coin) => (targetValues[coin] = 0));
 
-    // 2. Pembobotan Asimetris Berdasarkan Dominasi Momentum
+    dailyMomentum.sort((a, b) => b.finalQuantScore - a.finalQuantScore);
     if (targetExposure > 0 && dailyMomentum.length > 0) {
-      // 🛡️ PERUBAHAN KRUSIAL: Singkirkan koin yang terkena Stop-Loss hari ini dari radar pembelian
       const safePicks = dailyMomentum.filter(
         (item) => !emergencySells.includes(item.symbol),
       );
-
       const topPicks = safePicks.slice(0, 3);
       const totalScore = topPicks.reduce(
         (sum, item) => sum + item.finalQuantScore,
@@ -419,14 +356,13 @@ async function runBacktest() {
 
       if (totalScore > 0) {
         topPicks.forEach((pick) => {
-          const weight = pick.finalQuantScore / totalScore;
-          targetValues[pick.symbol] = totalCryptoBudget * weight;
+          targetValues[pick.symbol] =
+            totalCryptoBudget * (pick.finalQuantScore / totalScore);
         });
       }
     }
 
-    // 3. FASE 1: EKSEKUSI SELL (JUAL) LEBIH DULU
-    // Kita harus mengamankan USDT sebelum bisa dirotasi ke koin pemenang
+    // --- FASE 1: EKSEKUSI SELL ---
     for (const symbol of targetCoins) {
       const currentPrice = marketData[symbol]?.get(todayStr);
       if (!currentPrice) continue;
@@ -435,14 +371,13 @@ async function runBacktest() {
       const targetVal = targetValues[symbol];
       const diff = targetVal - currentVal;
 
-      if (diff < -50) {
-        // SAFETY CLAMP 1: Jangan jual lebih dari kuantitas aset yang kita punya!
+      // JUAL HANYA JIKA MELEBIHI THRESHOLD ATAU TERKENA CUT LOSS (0 Target)
+      if (diff < -rebalanceThreshold || (targetVal === 0 && currentVal > 10)) {
         const sellQty = Math.min(
           Math.abs(diff) / currentPrice,
           holdings[symbol],
         );
 
-        // Di dalam FASE 1: EKSEKUSI SELL
         if (sellQty > 0) {
           let avgPrice = 0;
           let pnl_percent = 0;
@@ -454,10 +389,8 @@ async function runBacktest() {
             pnl_value = (currentPrice - avgPrice) * sellQty;
           }
 
-          // Buat waktu buatan berbasis histori: Waktu Candle + 10 Menit
           let sellDate = new Date(todayStr);
           sellDate.setUTCHours(10, 0, 0, 0);
-          const simulatedSellTime = sellDate.toISOString();
 
           tradeHistoryRecords.push({
             symbol: symbol,
@@ -467,24 +400,21 @@ async function runBacktest() {
             amount: sellQty,
             pnl_percent: pnl_percent,
             pnl_value: pnl_value,
-            timestamp: simulatedSellTime, // <--- Gunakan Waktu Histori Buatan Ini
+            timestamp: sellDate.toISOString(),
           });
-        }
-        // ---------------------------------------------------
 
-        if (holdings[symbol] > 0) {
           const ratio = sellQty / holdings[symbol];
           costBasis[symbol] -= costBasis[symbol] * ratio;
-        }
+          capitalUSDT += sellQty * currentPrice;
+          holdings[symbol] -= sellQty;
 
-        capitalUSDT += sellQty * currentPrice;
-        holdings[symbol] -= sellQty;
-        actionLog.push(`-${symbol.replace("USDT", "")}`);
-        dayHasTrades = true;
+          actionLog.push(`-${symbol.replace("USDT", "")}`);
+          dayHasTrades = true;
+        }
       }
     }
 
-    // 4. FASE 2: EKSEKUSI BUY (BELI) SETELAH USDT TERSEDIA
+    // --- FASE 2: EKSEKUSI BUY ---
     for (const symbol of targetCoins) {
       const currentPrice = marketData[symbol]?.get(todayStr);
       if (!currentPrice) continue;
@@ -493,18 +423,15 @@ async function runBacktest() {
       const targetVal = targetValues[symbol];
       const diff = targetVal - currentVal;
 
-      if (diff > 50) {
-        // SAFETY CLAMP 2: Jangan beli melebihi USDT riil yang ada di dompet!
+      // BELI HANYA JIKA KEKURANGAN MELEBIHI THRESHOLD
+      if (diff > rebalanceThreshold) {
         const buyAmount = Math.min(diff, capitalUSDT);
 
-        // Di dalam FASE 2: EKSEKUSI BUY
         if (buyAmount > 10) {
           const buyQty = buyAmount / currentPrice;
 
-          // Buat waktu buatan berbasis histori: Waktu Candle + 20 Menit
           let buyDate = new Date(todayStr);
           buyDate.setUTCHours(10, 20, 0, 0);
-          const simulatedBuyTime = buyDate.toISOString();
 
           tradeHistoryRecords.push({
             symbol: symbol,
@@ -514,31 +441,34 @@ async function runBacktest() {
             amount: buyQty,
             pnl_percent: 0,
             pnl_value: 0,
-            timestamp: simulatedBuyTime, // <--- Gunakan Waktu Histori Buatan Ini
+            timestamp: buyDate.toISOString(),
           });
 
-          // --------------------------------------------------
-
-          // Lewati debu transaksi (dust)
           capitalUSDT -= buyAmount;
-          holdings[symbol] += buyQty; // Diperbaiki: gunakan buyQty agar lebih rapi
+          holdings[symbol] += buyQty;
           costBasis[symbol] += buyAmount;
+
           actionLog.push(`+${symbol.replace("USDT", "")}`);
           dayHasTrades = true;
-          totalTrades++; // Hitung sebagai trade baru
+          totalTrades++;
         }
       }
     }
 
+    // =========================================================
     // TAHAP 5: LOG HARIAN (DI DALAM LOOP)
+    // =========================================================
     if (dayHasTrades) {
       console.log(`\n=========================================`);
       console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE`);
       console.log(
         `📈 Market: ${regimeStatus} (${trendDirection}) | Mayer: ${mayer.toFixed(2)}x`,
       );
+
+      const actionText =
+        actionLog.length > 0 ? actionLog.join(", ") : "Rebalancing";
       console.log(
-        `🔄 Aksi  : ${actionLog.join(", ")} | Exp: ${(targetExposure * 100).toFixed(0)}%`,
+        `🔄 Aksi  : ${actionText} | Exp: ${(targetExposure * 100).toFixed(0)}%`,
       );
       console.log(
         `💰 Equity: $${currentPortfolioValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
@@ -547,16 +477,15 @@ async function runBacktest() {
 
       targetCoins.forEach((symbol) => {
         const currentPrice = marketData[symbol]?.get(todayStr);
+        if (!currentPrice) return;
         const val = holdings[symbol] * currentPrice;
         const pct = (val / currentPortfolioValue) * 100;
 
         if (pct > 0.5) {
-          // HITUNG AVG PRICE
           const avgPrice = costBasis[symbol] / holdings[symbol];
           const pnlPct = ((currentPrice - avgPrice) / avgPrice) * 100;
-
           console.log(
-            `${pct.toFixed(1).padStart(5)}% Spot $${symbol.replace("USDT", "").padEnd(5)} ` +
+            `${pct.toFixed(1).padStart(5)}% Spot ${symbol.replace("USDT", "").padEnd(5)} ` +
               `($${avgPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} avg) ` +
               `[${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(1)}%]`,
           );
@@ -568,7 +497,9 @@ async function runBacktest() {
       console.log(`=========================================`);
     }
 
+    // =========================================================
     // TAHAP 6: RECORDING
+    // =========================================================
     if (currentPortfolioValue > peakValue) peakValue = currentPortfolioValue;
     const currentDD = ((peakValue - currentPortfolioValue) / peakValue) * 100;
     if (currentDD > maxDrawdown) maxDrawdown = currentDD;
@@ -595,8 +526,9 @@ async function runBacktest() {
     });
   }
 
-  // --- 4. PENYIMPANAN DATA (SYNC) ---
+  // --- 4. PENYIMPANAN DATA (SYNC KE SUPABASE) ---
   console.log("\n📊 MENGIRIM DATA KE SUPABASE...");
+
   const chunkSize = 500;
   for (let i = 0; i < dailyRecords.length; i += chunkSize) {
     const chunk = dailyRecords.slice(i, i + chunkSize);
@@ -605,25 +537,21 @@ async function runBacktest() {
       .upsert(chunk, { onConflict: "date" });
   }
 
-  // --- TAMBAHKAN PROSES PENYIMPANAN TRADE HISTORY DI SINI ---
   console.log(
     `📝 Menyimpan ${tradeHistoryRecords.length} riwayat transaksi backtest...`,
   );
-  // (Opsional) Hapus riwayat lama agar tidak menumpuk saat Anda merun backtest berkali-kali
   await supabase.from("trade_history").delete().neq("symbol", "DUMMY");
 
   const tradeChunkSize = 500;
   for (let i = 0; i < tradeHistoryRecords.length; i += tradeChunkSize) {
     const chunk = tradeHistoryRecords.slice(i, i + tradeChunkSize);
-    const { error } = await supabase.from("trade_history").insert(chunk);
-    if (error) console.error("Error insert trade history:", error.message);
+    await supabase.from("trade_history").insert(chunk);
   }
-  // ---------------------------------------------------------
 
-  // B. Simpan Rincian Posisi Terakhir
   await supabase.from("current_positions").delete().neq("symbol", "DUMMY");
   const lastRecord = dailyRecords[dailyRecords.length - 1];
   const lastDateStr = btcTimeline[btcTimeline.length - 1].timestamp;
+
   let finalPositions = [
     {
       symbol: "USDT",
@@ -632,6 +560,7 @@ async function runBacktest() {
           parseFloat(lastRecord.total_value)) *
         100
       ).toFixed(2),
+      amount: parseFloat(lastRecord.cash_value).toFixed(2),
     },
   ];
 
@@ -639,13 +568,15 @@ async function runBacktest() {
     const price = marketData[symbol].get(lastDateStr);
     const val = holdings[symbol] * price;
     const pct = (val / parseFloat(lastRecord.total_value)) * 100;
-    if (pct > 1)
+    if (pct > 1) {
       finalPositions.push({
         symbol: symbol.replace("USDT", ""),
         percentage: pct.toFixed(2),
         avg_price: (costBasis[symbol] / holdings[symbol]).toFixed(4),
         amount: holdings[symbol].toFixed(6),
+        ath_price: athPrices[symbol] || marketData[symbol].get(lastDateStr), // <--- TAMBAHKAN INI
       });
+    }
   }
   await supabase.from("current_positions").insert(finalPositions);
 
