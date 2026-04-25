@@ -117,7 +117,7 @@ async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
       ? `✅ BEATING MARKET BY +${alpha.toFixed(2)}%`
       : `⚠️ UNDERPERFORMING BTC BY ${Math.abs(alpha).toFixed(2)}%`;
   message += `*STATUS:* ${status}\n\n`;
-  message += `🔗 [Dashboard Link](https://your-dashboard-url.vercel.app/)`;
+  message += `🔗 [Dashboard Link](https://oracle-quant.vercel.app/)`;
 
   await sendTelegram(message);
 }
