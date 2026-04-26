@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "@supabase/supabase-js": "^2.99.2",
+    "bybit-api": "^4.6.2",
     "dotenv": "^17.3.1",
     "yahoo-finance2": "^3.13.2"
   }
