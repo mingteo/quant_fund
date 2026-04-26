@@ -42,8 +42,6 @@ jobs:
           node fetchMacro.js
           node fetchDerivatives.js
 
-      # ❌ STEP "Run Backtest Engine" TELAH DIHAPUS TOTAL DARI SINI ❌
-
       - name: 🤖 Execute Live Rebalancing & Broadcast
         env:
           TZ: "Asia/Jakarta"
@@ -51,4 +49,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BYBIT_API_KEY: ${{ secrets.BYBIT_API_KEY }}
+          BYBIT_API_SECRET: ${{ secrets.BYBIT_API_SECRET }}
         run: node dailyBot.js
