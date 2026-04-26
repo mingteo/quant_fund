@@ -534,7 +534,7 @@ async function runDailyOracle() {
       );
 
     // --- 5. UPDATE DATABASE (STATE PERSISTENCE) ---
-    const START_CAPITAL = parseFloat(process.env.INCEPTION_CAPITAL || "10000");
+    const START_CAPITAL = parseFloat(process.env.INCEPTION_CAPITAL || "200");
     const START_BTC_PRICE = parseFloat(
       process.env.INCEPTION_BTC_PRICE || "40581",
     );
