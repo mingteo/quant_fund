@@ -199,7 +199,7 @@ async function executeLiveRebalancing(
 ) {
   console.log("\n🤖 MEMULAI ORACLE LIVE REBALANCING (BYBIT V5 API)...");
   const serverTimeMs = Date.now();
-  const rebalanceThreshold = totalEquity * 0.05;
+  const rebalanceThreshold = 0; // MATIKAN PERISAI SEMENTARA
   let isSellExecuted = false;
   let newCapitalUSDT = capitalUSDT;
   let newHoldings = { ...currentHoldings };
@@ -209,7 +209,7 @@ async function executeLiveRebalancing(
   for (const symbol of Object.keys(targetValues)) {
     const currentPrice = marketPrices[symbol];
     if (!currentPrice) continue;
-    const currentVal = newHoldings[symbol] * currentPrice;
+    const currentVal = (newHoldings[symbol] || 0) * currentPrice;
     const targetVal = targetValues[symbol];
     const diff = targetVal - currentVal;
 
@@ -271,55 +271,60 @@ async function executeLiveRebalancing(
   for (const symbol of Object.keys(targetValues)) {
     const currentPrice = marketPrices[symbol];
     if (!currentPrice) continue;
-    const currentVal = newHoldings[symbol] * currentPrice;
+    const currentVal = (newHoldings[symbol] || 0) * currentPrice;
     const targetVal = targetValues[symbol];
     const diff = targetVal - currentVal;
 
     if (diff > rebalanceThreshold) {
       const buyAmount = Math.min(diff, newCapitalUSDT);
-      if (buyAmount > 10) {
+      if (buyAmount >= 10) {
         const rule = bybitRules[symbol] || {
           qtyStep: "0.0001",
           priceStep: "0.01",
         };
-        const rawBuyQty = buyAmount / currentPrice;
-        const buyQty = applyPrecision(rawBuyQty, rule.qtyStep); // Pembulatan Presisi Bybit
 
-        // ⚔️ THE GUILLOTINE: Hard Stop-Loss 15% di bawah harga dengan presisi Tick Size
+        // 🚨 KUNCI PERBAIKAN: Bybit Market Buy butuh nominal USDT (Quote), BUKAN koin!
+        // Kita bulatkan nominal belanjanya ke 2 desimal (contoh: "15.00")
+        const buyQtyUSDT = (Math.floor(buyAmount * 100) / 100).toFixed(2);
+
+        // ⚔️ THE GUILLOTINE: Hard Stop-Loss 15% di bawah harga
         const rawStopLoss = currentPrice * 0.85;
         const hardStopLossPrice = applyPrecision(rawStopLoss, rule.priceStep);
 
         try {
           console.log(
-            `📥 MENGIRIM ORDER BUY KE BYBIT: ${symbol} sejumlah ${buyQty} dengan SL di $${hardStopLossPrice}`,
+            `📥 MENGIRIM ORDER BUY KE BYBIT: ${symbol} senilai $${buyQtyUSDT} USDT dengan SL di $${hardStopLossPrice}`,
           );
-
-          // UNCOMMENT BARIS DI BAWAH INI UNTUK EKSEKUSI REAL KE BYBIT
 
           const response = await bybitClient.submitOrder({
             category: "spot",
             symbol: symbol,
             side: "Buy",
             orderType: "Market",
-            qty: buyQty.toString(),
-            stopLoss: hardStopLossPrice.toString(),
-            slOrderType: "Market",
+            qty: buyQtyUSDT.toString(), // <--- INI SEKARANG BERNILAI "15.00"
+            // stopLoss: hardStopLossPrice.toString(),
+            // slOrderType: "Market",
           });
           if (response.retCode !== 0) throw new Error(response.retMsg);
 
+          // Hitung estimasi koin untuk dicatat di database Supabase kita
+          const estimatedKoinDidapat = parseFloat(buyQtyUSDT) / currentPrice;
           const delayMs = isSellExecuted ? 1500 : 0;
+
           await recordTrade(
             symbol,
             "BUY",
             currentPrice,
-            parseFloat(buyQty),
+            estimatedKoinDidapat,
             0,
             new Date(serverTimeMs + delayMs).toISOString(),
           );
 
-          newCapitalUSDT -= buyAmount;
-          newHoldings[symbol] = (newHoldings[symbol] || 0) + parseFloat(buyQty);
-          newCostBasis[symbol] = (newCostBasis[symbol] || 0) + buyAmount;
+          newCapitalUSDT -= parseFloat(buyQtyUSDT);
+          newHoldings[symbol] =
+            (newHoldings[symbol] || 0) + estimatedKoinDidapat;
+          newCostBasis[symbol] =
+            (newCostBasis[symbol] || 0) + parseFloat(buyQtyUSDT);
         } catch (error) {
           console.error(`❌ BYBIT BUY ERROR (${symbol}):`, error.message);
         }

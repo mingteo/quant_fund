@@ -158,7 +158,7 @@ async function runBacktest() {
   }
 
   // C. Inisialisasi Portofolio
-  let capitalUSDT = 10000;
+  let capitalUSDT = 200;
   let holdings = {};
   let costBasis = {};
   let athPrices = {};
@@ -168,7 +168,7 @@ async function runBacktest() {
     athPrices[coin] = 0;
   });
 
-  let peakValue = 10000;
+  let peakValue = 200;
   let maxDrawdown = 0;
   let dailyRecords = [];
   let tradeHistoryRecords = [];
@@ -513,7 +513,7 @@ async function runBacktest() {
       total_value: currentPortfolioValue.toFixed(2),
       cash_value: capitalUSDT.toFixed(2),
       crypto_value: (currentPortfolioValue - capitalUSDT).toFixed(2),
-      system_roi: (((currentPortfolioValue - 10000) / 10000) * 100).toFixed(2),
+      system_roi: (((currentPortfolioValue - 200) / 200) * 100).toFixed(2),
       btc_roi: (
         ((currentBTCPrice - startBTCPrice) / startBTCPrice) *
         100
@@ -591,7 +591,7 @@ async function runBacktest() {
   );
   console.log(`║          🏆 HASIL AKHIR BACKTEST (QUANT GOLD)              ║`);
   console.log(`╠════════════════════════════════════════════════════════════╣`);
-  console.log(`   💰 Modal Awal          : $10,000.00                        `);
+  console.log(`   💰 Modal Awal          : $200.00                          `);
   console.log(
     `   💵 Nilai Akhir         : $${finalValue.toFixed(2).padStart(12)}               `,
   );
