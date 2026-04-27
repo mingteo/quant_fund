@@ -1,4 +1,5 @@
 require("dotenv").config();
+const { execSync } = require("child_process");
 const { createClient } = require("@supabase/supabase-js");
 
 const supabase = createClient(
@@ -123,7 +124,7 @@ async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
     hasCrypto = true;
     cryptoExposurePct += parseFloat(p.percentage);
     const isWhaleTarget = parseFloat(p.percentage) > 20 ? "🐋" : "⚡";
-    activePositionsText += `${isWhaleTarget} *${p.symbol}*: ${p.percentage}% _(@ $${parseFloat(p.avg_price).toLocaleString(undefined, { maximumFractionDigits: 4 })})_\n`;
+    activePositionsText += `${isWhaleTarget} *${p.symbol}*: ${p.percentage}% _(Break-Even: $${parseFloat(p.avg_price).toLocaleString(undefined, { maximumFractionDigits: 4 })})_\n`;
   });
 
   const cashExposurePct = (100 - cryptoExposurePct).toFixed(1);
@@ -199,7 +200,7 @@ async function executeLiveRebalancing(
 ) {
   console.log("\n🤖 MEMULAI ORACLE LIVE REBALANCING (BYBIT V5 API)...");
   const serverTimeMs = Date.now();
-  const rebalanceThreshold = 0; // MATIKAN PERISAI SEMENTARA
+  const rebalanceThreshold = totalEquity * 0.05;
   let isSellExecuted = false;
   let newCapitalUSDT = capitalUSDT;
   let newHoldings = { ...currentHoldings };
@@ -335,10 +336,75 @@ async function executeLiveRebalancing(
 }
 
 // ====================================================================
+// 3.5 MODUL AUTO-SYNC BALANCE DARI BYBIT (SOLUSI SLIPPAGE & FEE)
+// ====================================================================
+async function syncRealBybitBalances() {
+  console.log("🔄 Auto-Sync: Mengambil saldo fisik asli dari dompet Bybit...");
+  try {
+    // Mencoba tarik dari tipe akun UNIFIED (Standar akun baru Bybit)
+    let response = await bybitClient.getWalletBalance({
+      accountType: "UNIFIED",
+    });
+
+    // Jika gagal, fallback ke akun tipe SPOT lama
+    if (
+      response.retCode !== 0 ||
+      !response.result.list ||
+      response.result.list.length === 0
+    ) {
+      response = await bybitClient.getWalletBalance({ accountType: "SPOT" });
+    }
+
+    if (response.retCode === 0 && response.result.list.length > 0) {
+      const coinList = response.result.list[0].coin;
+      let realBalances = {};
+      coinList.forEach((c) => {
+        realBalances[c.coin] = parseFloat(c.walletBalance);
+      });
+      console.log(
+        "✅ Auto-Sync Berhasil! Data Supabase akan disesuaikan dengan dompet asli.",
+      );
+      return realBalances;
+    } else {
+      throw new Error(response.retMsg || "Gagal membaca saldo koin.");
+    }
+  } catch (error) {
+    console.error(
+      "❌ Auto-Sync Error (Menggunakan kalkulasi estimasi):",
+      error.message,
+    );
+    return null;
+  }
+}
+
+// ====================================================================
 // 4. MAIN ORCHESTRATOR (THE QUANT BRAIN)
 // ====================================================================
 async function runDailyOracle() {
   console.log("🚀 MENGAKTIFKAN QUANT ORACLE (BYBIT V5 LIVE)...");
+
+  // --- 0. DATA PIPELINE TRIGGER (AUTO-FETCH) ---
+  console.log("🔄 Memperbarui database market_data...");
+  try {
+    console.log("-> 1/3: Menarik data harga pasar (fetchHistory.js)...");
+    execSync("node fetchHistory.js", { stdio: "inherit" });
+
+    console.log("-> 2/3: Menarik data makro DXY & SPX (fetchMacro.js)...");
+    execSync("node fetchMacro.js", { stdio: "inherit" });
+
+    console.log("-> 3/3: Menarik data Open Interest (fetchDerivatives.js)...");
+    execSync("node fetchDerivatives.js", { stdio: "inherit" });
+
+    console.log(
+      "✅ Semua database (Market, Macro, Derivatives) berhasil diperbarui!",
+    );
+    console.log("🧠 Memulai kalkulasi otak Oracle...");
+  } catch (error) {
+    console.error("❌ Terjadi kegagalan pada Data Pipeline:", error.message);
+    console.log(
+      "⚠️ Bot akan melanjutkan perhitungan menggunakan data terakhir yang ada di Supabase.",
+    );
+  }
 
   try {
     // Muat Aturan Bybit terlebih dahulu
@@ -538,7 +604,39 @@ async function runDailyOracle() {
         totalEquity,
       );
 
+    // --- 4.5 AUTOSYNC REAL BALANCES (PENGHANCUR SLIPPAGE & DEBU KOIN) ---
+    // Beri waktu 3 detik agar Bybit selesai menghitung potongan fee dan settling order
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    const realBalances = await syncRealBybitBalances();
+    let finalCapitalUSDT = newCapitalUSDT;
+    let finalHoldings = { ...newHoldings };
+
+    if (realBalances) {
+      finalCapitalUSDT = realBalances["USDT"] || 0;
+
+      targetCoins.forEach((symbol) => {
+        const coinName = symbol.replace("USDT", ""); // Ubah BTCUSDT jadi BTC
+        const physicalBalance = realBalances[coinName] || 0;
+        const currentP = marketPrices[symbol] || 1;
+
+        // Jika nilai koin fisik di Bybit kurang dari $1, anggap itu "debu kripto" dan buang dari catatan (0)
+        if (physicalBalance * currentP > 1) {
+          finalHoldings[symbol] = physicalBalance;
+        } else {
+          finalHoldings[symbol] = 0;
+        }
+      });
+    }
+
     // --- 5. UPDATE DATABASE (STATE PERSISTENCE) ---
+    // 💡 REKALKULASI TOTAL EQUITY BERDASARKAN HASIL FISIK BYBIT TERBARU
+    let finalCryptoValue = 0;
+    for (const [sym, qty] of Object.entries(finalHoldings)) {
+      finalCryptoValue += qty * (marketPrices[sym] || 0);
+    }
+    const finalTotalEquity = finalCapitalUSDT + finalCryptoValue;
+
     const START_CAPITAL = parseFloat(process.env.INCEPTION_CAPITAL || "200");
     const START_BTC_PRICE = parseFloat(
       process.env.INCEPTION_BTC_PRICE || "40581",
@@ -557,11 +655,11 @@ async function runDailyOracle() {
         if (val > peakValue) peakValue = val;
       });
     }
-    if (totalEquity > peakValue) peakValue = totalEquity;
-    const maxDrawdown = ((peakValue - totalEquity) / peakValue) * 100;
+    if (finalTotalEquity > peakValue) peakValue = finalTotalEquity;
+    const maxDrawdown = ((peakValue - finalTotalEquity) / peakValue) * 100;
 
     const currentSystemRoi = (
-      ((totalEquity - START_CAPITAL) / START_CAPITAL) *
+      ((finalTotalEquity - START_CAPITAL) / START_CAPITAL) *
       100
     ).toFixed(2);
     const currentBtcRoi = (
@@ -580,9 +678,9 @@ async function runDailyOracle() {
       [
         {
           date: todayOnly,
-          total_value: totalEquity.toFixed(2),
-          cash_value: newCapitalUSDT.toFixed(2),
-          crypto_value: (totalEquity - newCapitalUSDT).toFixed(2),
+          total_value: finalTotalEquity.toFixed(2),
+          cash_value: finalCapitalUSDT.toFixed(2),
+          crypto_value: finalCryptoValue.toFixed(2),
           system_roi: currentSystemRoi,
           btc_roi: currentBtcRoi,
           spx_roi: currentSpxRoi,
@@ -596,16 +694,16 @@ async function runDailyOracle() {
     let finalPositions = [
       {
         symbol: "USDT",
-        percentage: ((newCapitalUSDT / totalEquity) * 100).toFixed(2),
-        amount: newCapitalUSDT.toFixed(2),
+        percentage: ((finalCapitalUSDT / finalTotalEquity) * 100).toFixed(2),
+        amount: finalCapitalUSDT.toFixed(2),
         ath_price: 0,
       },
     ];
 
-    for (const [symbol, qty] of Object.entries(newHoldings)) {
+    for (const [symbol, qty] of Object.entries(finalHoldings)) {
       const price = marketPrices[symbol];
       const val = qty * price;
-      const pct = (val / totalEquity) * 100;
+      const pct = (val / finalTotalEquity) * 100;
       if (pct > 1) {
         finalPositions.push({
           symbol: symbol.replace("USDT", ""),
@@ -619,7 +717,7 @@ async function runDailyOracle() {
     await supabase.from("current_positions").insert(finalPositions);
 
     // --- 6. TELEGRAM ---
-    await broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT);
+    await broadcastUpdate(regimeStatus, finalTotalEquity, finalCapitalUSDT);
   } catch (error) {
     console.error("❌ ERROR:", error);
     await sendTelegram(
