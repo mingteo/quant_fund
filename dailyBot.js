@@ -639,10 +639,10 @@ async function runDailyOracle() {
 
     const START_CAPITAL = parseFloat(process.env.INCEPTION_CAPITAL || "200");
     const START_BTC_PRICE = parseFloat(
-      process.env.INCEPTION_BTC_PRICE || "40581",
+      process.env.INCEPTION_BTC_PRICE || "77576.7",
     );
     const START_SPX_PRICE = parseFloat(
-      process.env.INCEPTION_SPX_PRICE || "4100",
+      process.env.INCEPTION_SPX_PRICE || "7165.07",
     );
 
     const { data: allHistory } = await supabase
