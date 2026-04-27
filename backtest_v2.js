@@ -33,7 +33,7 @@ async function fetchAllSupabaseRows(table, select, eqObj, orderCol) {
   return allData;
 }
 
-// --- 1. FUNGSI MATEMATIKA (UTILITIES) ---
+// --- 1. FUNGSI MATEMATIKA (UTILITIES V2) ---
 function calculateEMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1] || 0;
   const k = 2 / (period + 1);
@@ -54,9 +54,23 @@ function calculateROC(prices, period) {
   return ((current - past) / past) * 100;
 }
 
+// 🌟 UPGRADE 1: HISTORICAL VOLATILITY
+function calculateVolatility(prices, period) {
+  if (prices.length < period) return 0.15;
+  const slice = prices.slice(-period);
+  const mean = slice.reduce((a, b) => a + b, 0) / period;
+  const variance =
+    slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / period;
+  const stdev = Math.sqrt(variance);
+  let volPct = stdev / mean;
+  if (volPct < 0.08) volPct = 0.08;
+  if (volPct > 0.25) volPct = 0.25;
+  return volPct;
+}
+
 // --- 2. ENGINE BACKTEST UTAMA ---
-async function runBacktest() {
-  console.log("🚀 MEMULAI BACKTEST: VERSI QUANT GOLD (HYSTERESIS & LOGS)...");
+async function runBacktestV2() {
+  console.log("🚀 MEMULAI BACKTEST: VERSI QUANT V2 (INSTITUTIONAL GRADE)...");
 
   const targetCoins = [
     "BTCUSDT",
@@ -202,6 +216,7 @@ async function runBacktest() {
     const btcPrices = getPricesUpToToday("BTCUSDT");
     if (btcPrices.length < 200) continue;
     const currentBTCPrice = btcPrices[btcPrices.length - 1];
+    const btcRoc14 = calculateROC(btcPrices, 14);
 
     let currentCryptoValue = 0;
     for (const symbol of targetCoins) {
@@ -211,18 +226,16 @@ async function runBacktest() {
     let currentPortfolioValue = capitalUSDT + currentCryptoValue;
 
     // =========================================================
-    // TAHAP 1: SMART REGIME & EXPOSURE (QUANTITATIVE CONTRARIAN)
+    // TAHAP 1: SMART REGIME & EXPOSURE
     // =========================================================
     const btcEma20 = calculateEMA(btcPrices.slice(-100), 20);
     const btcEma50 = calculateEMA(btcPrices.slice(-100), 50);
     const trendDirection = btcEma20 > btcEma50 ? "UPTREND" : "DOWNTREND";
-    const btcRoc14 = calculateROC(btcPrices, 14);
     const btcSma200 = calculateSMA(btcPrices, 200);
     const mayer = currentBTCPrice / btcSma200;
 
-    let targetExposure = 0;
-    let regimeStatus = "";
-
+    let targetExposure = 0,
+      regimeStatus = "";
     if (mayer < 0.75) {
       targetExposure = btcRoc14 > -15 ? 1.0 : 0.5;
       regimeStatus = "ACCUMULATION (DEEP DISCOUNT)";
@@ -251,7 +264,35 @@ async function runBacktest() {
     }
 
     // =========================================================
-    // TAHAP 2: RANKING MOMENTUM & ROTASI SEKTORAL
+    // TAHAP 2: THE PROFIT LOCKER (DYNAMIC TRAILING STOP V2)
+    // =========================================================
+    let emergencySells = [];
+    let actionLog = [];
+
+    for (const symbol of targetCoins) {
+      if (holdings[symbol] > 0) {
+        const prices = getPricesUpToToday(symbol);
+        const dynamicStopTolerance = calculateVolatility(prices, 14);
+        const currentPrice = marketData[symbol]?.get(todayStr);
+
+        if (currentPrice > athPrices[symbol]) athPrices[symbol] = currentPrice;
+
+        const dropFromAth =
+          (athPrices[symbol] - currentPrice) / athPrices[symbol];
+        if (dropFromAth >= dynamicStopTolerance) {
+          emergencySells.push(symbol);
+          actionLog.push(
+            `🚨 DYN-TS: ${symbol.replace("USDT", "")} (-${(dropFromAth * 100).toFixed(1)}%)`,
+          );
+          athPrices[symbol] = 0;
+        }
+      } else {
+        athPrices[symbol] = 0;
+      }
+    }
+
+    // =========================================================
+    // TAHAP 3: RANKING & RELATIVE STRENGTH V2
     // =========================================================
     const getVolumesUpToToday = (symbol) => {
       let vols = [];
@@ -277,7 +318,14 @@ async function runBacktest() {
       const roc14 = calculateROC(prices, 14);
       const roc30 = calculateROC(prices, 30);
 
-      if (roc14 > 0 && distanceToSma50 < 40) {
+      // 🌟 UPGRADE 2: RELATIVE STRENGTH
+      const relativeStrengthVsBtc = roc14 - btcRoc14;
+
+      if (
+        roc14 > 0 &&
+        (relativeStrengthVsBtc > 0 || symbol === "BTCUSDT") &&
+        distanceToSma50 < 40
+      ) {
         const currentVol = vols[vols.length - 1];
         const avgVol20 = calculateSMA(vols.slice(-20), 20);
 
@@ -299,7 +347,8 @@ async function runBacktest() {
           else if (oiChange < -10) oiMultiplier = 0.1;
         }
 
-        const baseScore = roc14 * 0.6 + roc30 * 0.4;
+        const baseScore =
+          roc14 * 0.5 + roc30 * 0.3 + relativeStrengthVsBtc * 0.2;
         if (baseScore > 0) {
           dailyMomentum.push({
             symbol,
@@ -310,36 +359,18 @@ async function runBacktest() {
     }
 
     // =========================================================
-    // TAHAP 3: THE PROFIT LOCKER (TRAILING STOP)
-    // =========================================================
-    const trailingStopTolerance = 0.15;
-    let emergencySells = [];
-    let actionLog = [];
-
-    for (const symbol of targetCoins) {
-      if (holdings[symbol] > 0) {
-        const currentPrice = marketData[symbol]?.get(todayStr);
-        if (currentPrice > athPrices[symbol]) athPrices[symbol] = currentPrice;
-
-        const dropFromAth =
-          (athPrices[symbol] - currentPrice) / athPrices[symbol];
-        if (dropFromAth >= trailingStopTolerance) {
-          emergencySells.push(symbol);
-          actionLog.push(`🚨 TS-TRIGGER: ${symbol.replace("USDT", "")}`);
-          athPrices[symbol] = 0;
-        }
-      } else {
-        athPrices[symbol] = 0;
-      }
-    }
-
-    // =========================================================
-    // TAHAP 4: ASYMMETRIC REBALANCING (WITH HYSTERESIS)
+    // TAHAP 4: ASYMMETRIC REBALANCING (DYNAMIC HYSTERESIS)
     // =========================================================
     const totalCryptoBudget = currentPortfolioValue * targetExposure;
-    const rebalanceThreshold = currentPortfolioValue * 0.05; // 🛡️ HYSTERESIS 5%
-    let dayHasTrades = false;
 
+    // 🌟 UPGRADE 3: DYNAMIC HYSTERESIS
+    const cashRatio = capitalUSDT / currentPortfolioValue;
+    let dynamicHysteresisPct = 0.05;
+    if (cashRatio > 0.5) dynamicHysteresisPct = 0.03;
+    else if (cashRatio < 0.2) dynamicHysteresisPct = 0.08;
+    const rebalanceThreshold = currentPortfolioValue * dynamicHysteresisPct;
+
+    let dayHasTrades = false;
     let targetValues = {};
     targetCoins.forEach((coin) => (targetValues[coin] = 0));
 
@@ -378,29 +409,10 @@ async function runBacktest() {
         );
 
         if (sellQty > 0) {
-          let avgPrice = 0;
-          let pnl_percent = 0;
-          let pnl_value = 0;
-
-          if (holdings[symbol] > 0) {
-            avgPrice = costBasis[symbol] / holdings[symbol];
-            pnl_percent = ((currentPrice - avgPrice) / avgPrice) * 100;
-            pnl_value = (currentPrice - avgPrice) * sellQty;
-          }
-
+          let avgPrice =
+            holdings[symbol] > 0 ? costBasis[symbol] / holdings[symbol] : 0;
           let sellDate = new Date(todayStr);
           sellDate.setUTCHours(10, 0, 0, 0);
-
-          tradeHistoryRecords.push({
-            symbol: symbol,
-            type: "SELL",
-            entry_price: avgPrice,
-            exit_price: currentPrice,
-            amount: sellQty,
-            pnl_percent: pnl_percent,
-            pnl_value: pnl_value,
-            timestamp: sellDate.toISOString(),
-          });
 
           const ratio = sellQty / holdings[symbol];
           costBasis[symbol] -= costBasis[symbol] * ratio;
@@ -427,20 +439,8 @@ async function runBacktest() {
 
         if (buyAmount > 10) {
           const buyQty = buyAmount / currentPrice;
-
           let buyDate = new Date(todayStr);
           buyDate.setUTCHours(10, 20, 0, 0);
-
-          tradeHistoryRecords.push({
-            symbol: symbol,
-            type: "BUY",
-            entry_price: currentPrice,
-            exit_price: currentPrice,
-            amount: buyQty,
-            pnl_percent: 0,
-            pnl_value: 0,
-            timestamp: buyDate.toISOString(),
-          });
 
           capitalUSDT -= buyAmount;
           holdings[symbol] += buyQty;
@@ -509,8 +509,6 @@ async function runBacktest() {
     dailyRecords.push({
       date: dateOnly,
       total_value: currentPortfolioValue.toFixed(2),
-      cash_value: capitalUSDT.toFixed(2),
-      crypto_value: (currentPortfolioValue - capitalUSDT).toFixed(2),
       system_roi: (((currentPortfolioValue - 200) / 200) * 100).toFixed(2),
       btc_roi: (
         ((currentBTCPrice - startBTCPrice) / startBTCPrice) *
@@ -524,12 +522,7 @@ async function runBacktest() {
     });
   }
 
-  // --- 4. PENYIMPANAN DATA (SYNC KE SUPABASE) - DINONAKTIFKAN ---
-  console.log(
-    "\nℹ️ Info: Penulisan data hasil simulasi (V1) ke database Supabase telah dinonaktifkan secara aman.",
-  );
-
-  // --- KESIMPULAN AKHIR ---
+  // --- 4. KESIMPULAN AKHIR (TANPA MENIMPA SUPABASE) ---
   const lastRecord = dailyRecords[dailyRecords.length - 1];
   const finalValue = parseFloat(lastRecord.total_value);
   const totalROI = parseFloat(lastRecord.system_roi);
@@ -539,7 +532,7 @@ async function runBacktest() {
   console.log(
     `\n╔════════════════════════════════════════════════════════════╗`,
   );
-  console.log(`║          🏆 HASIL AKHIR BACKTEST (QUANT GOLD)              ║`);
+  console.log(`║          🏆 HASIL AKHIR BACKTEST (QUANT V2)                ║`);
   console.log(`╠════════════════════════════════════════════════════════════╣`);
   console.log(`   💰 Modal Awal          : $200.00                          `);
   console.log(
@@ -566,6 +559,10 @@ async function runBacktest() {
   console.log(
     `╚════════════════════════════════════════════════════════════╝\n`,
   );
+
+  console.log(
+    "ℹ️ Info: Penulisan data hasil simulasi ke database Supabase telah dinonaktifkan untuk melindungi data V1 Anda.",
+  );
 }
 
-runBacktest();
+runBacktestV2();
