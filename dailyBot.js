@@ -157,8 +157,8 @@ async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
   const alpha = parseFloat(last.system_roi) - parseFloat(last.btc_roi);
   const status =
     alpha > 0
-      ? `✅ BEATING MARKET BY +${alpha.toFixed(2)}%`
-      : `⚠️ UNDERPERFORMING BTC BY ${Math.abs(alpha).toFixed(2)}%`;
+      ? `✅ UPPERFORMING BTC ROI BY +${alpha.toFixed(2)}%`
+      : `⚠️ UNDERPERFORMING BTC ROI BY ${Math.abs(alpha).toFixed(2)}%`;
   message += `*STATUS:* ${status}\n\n`;
   message += `🔗 [Dashboard Link](https://oracle-quant.vercel.app/)`;
 
