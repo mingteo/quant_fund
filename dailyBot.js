@@ -474,14 +474,16 @@ async function runDailyOracle() {
     for (const symbol of targetCoins) {
       const { data } = await supabase
         .from("derivatives_data")
-        .select("open_interest")
+        .select("open_interest, funding_rate")
         .eq("symbol", symbol)
         .order("timestamp", { ascending: false })
         .limit(5);
-      if (data && data.length >= 5)
-        oiHistory[symbol] = data
-          .reverse()
-          .map((d) => parseFloat(d.open_interest));
+      if (data && data.length >= 5) {
+        oiHistory[symbol] = data.reverse().map((d) => ({
+          oi: parseFloat(d.open_interest),
+          fr: parseFloat(d.funding_rate || 0), // Simpan juga FR-nya
+        }));
+      }
     }
 
     let currentCryptoValue = 0;
@@ -555,20 +557,38 @@ async function runDailyOracle() {
         else if (currentVol > avgVol20 * 1.5) smartMoneyMultiplier = 1.5;
 
         let oiMultiplier = 1.0;
+        let frMultiplier = 1.0; // INISIALISASI FR MULTIPLIER
+
         if (oiHistory[symbol] && oiHistory[symbol].length === 5) {
-          const currentOI = oiHistory[symbol][4];
-          const pastOI = oiHistory[symbol][0];
+          const currentOI = oiHistory[symbol][4].oi;
+          const pastOI = oiHistory[symbol][0].oi;
+          const currentFR = oiHistory[symbol][4].fr; // Ambil FR hari ini
+
+          // Logika 1: Open Interest (Volume Uang Paus)
           const oiChange = ((currentOI - pastOI) / pastOI) * 100;
           if (oiChange > 15 && distanceToSma50 < 20) oiMultiplier = 1.5;
           else if (oiChange < -10) oiMultiplier = 0.1;
+
+          // Logika 2: Funding Rate (Arah Taruhan Paus & Retail)
+          // OKX menggunakan desimal: 0.0001 artinya 0.01% (Normal)
+          if (currentFR < -0.0005) {
+            // FR sangat negatif (<-0.05%). Banyak yang pasang Short, rawan diterbangkan! (Short Squeeze)
+            frMultiplier = 1.2; // Tambah skor 20%
+          } else if (currentFR > 0.001) {
+            // FR sangat positif (>0.1%). Terlalu banyak Long serakah, rawan dibanting!
+            frMultiplier = 0.8; // Kurangi skor 20%
+          }
         }
 
         const baseScore = roc14 * 0.6 + roc30 * 0.4;
-        if (baseScore > 0)
+        if (baseScore > 0) {
           dailyMomentum.push({
             symbol,
-            finalQuantScore: baseScore * smartMoneyMultiplier * oiMultiplier,
+            // Kalikan skor akhir dengan semua multiplier!
+            finalQuantScore:
+              baseScore * smartMoneyMultiplier * oiMultiplier * frMultiplier,
           });
+        }
       }
     }
 

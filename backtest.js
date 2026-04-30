@@ -56,7 +56,7 @@ function calculateROC(prices, period) {
 
 // --- 2. ENGINE BACKTEST UTAMA ---
 async function runBacktest() {
-  console.log("🚀 MEMULAI BACKTEST: VERSI QUANT GOLD (HYSTERESIS & LOGS)...");
+  console.log("🚀 MEMULAI BACKTEST V1: FR/OI + LOGS (TANPA RANK BUFFER)...");
 
   const targetCoins = [
     "BTCUSDT",
@@ -100,7 +100,7 @@ async function runBacktest() {
     );
   }
 
-  // B. Ambil Data Makro & Derivatives
+  // B. Ambil Data Makro & Derivatives (TERMASUK FUNDING RATE)
   const dxyData = await fetchAllSupabaseRows(
     "macro_data",
     "timestamp, close",
@@ -141,10 +141,12 @@ async function runBacktest() {
     return;
   }
 
+  // Tarik data OI beserta Funding Rate
   const { data: oiData } = await supabase
     .from("derivatives_data")
-    .select("symbol, open_interest, timestamp")
+    .select("symbol, open_interest, funding_rate, timestamp")
     .order("timestamp", { ascending: true });
+
   let derivativesTimeline = {};
   if (oiData) {
     oiData.forEach((row) => {
@@ -153,6 +155,7 @@ async function runBacktest() {
       derivativesTimeline[sym].push({
         dateOnly: new Date(row.timestamp).toISOString().split("T")[0],
         oi: parseFloat(row.open_interest),
+        fr: parseFloat(row.funding_rate || 0), // Menyimpan nilai Funding Rate
       });
     });
   }
@@ -251,7 +254,7 @@ async function runBacktest() {
     }
 
     // =========================================================
-    // TAHAP 2: RANKING MOMENTUM & ROTASI SEKTORAL
+    // TAHAP 2: RANKING MOMENTUM & ROTASI SEKTORAL (WITH FR - NO BUFFER)
     // =========================================================
     const getVolumesUpToToday = (symbol) => {
       let vols = [];
@@ -285,25 +288,38 @@ async function runBacktest() {
         if (currentVol > avgVol20 * 2.5) smartMoneyMultiplier = 2.0;
         else if (currentVol > avgVol20 * 1.5) smartMoneyMultiplier = 1.5;
 
+        // Implementasi logika OI & FR
         let oiMultiplier = 1.0;
-        const availableOI =
-          derivativesTimeline[symbol]
-            ?.filter((d) => d.dateOnly <= dateOnly)
-            .map((d) => d.oi) || [];
-        if (availableOI.length >= 5) {
-          const currentOI = availableOI[availableOI.length - 1];
-          const pastOI = availableOI[availableOI.length - 5];
-          const oiChange = ((currentOI - pastOI) / pastOI) * 100;
+        let frMultiplier = 1.0;
+        const availableDerivatives =
+          derivativesTimeline[symbol]?.filter((d) => d.dateOnly <= dateOnly) ||
+          [];
 
+        if (availableDerivatives.length >= 5) {
+          const currentDeriv =
+            availableDerivatives[availableDerivatives.length - 1];
+          const pastDeriv =
+            availableDerivatives[availableDerivatives.length - 5];
+
+          const oiChange =
+            ((currentDeriv.oi - pastDeriv.oi) / pastDeriv.oi) * 100;
           if (oiChange > 15 && distanceToSma50 < 20) oiMultiplier = 1.5;
           else if (oiChange < -10) oiMultiplier = 0.1;
+
+          if (currentDeriv.fr < -0.0005) frMultiplier = 1.2;
+          else if (currentDeriv.fr > 0.001) frMultiplier = 0.8;
         }
 
         const baseScore = roc14 * 0.6 + roc30 * 0.4;
+
         if (baseScore > 0) {
+          // PURE SCORE, TIDAK ADA RANK BUFFER DISINI (V1)
+          let finalScore =
+            baseScore * smartMoneyMultiplier * oiMultiplier * frMultiplier;
+
           dailyMomentum.push({
             symbol,
-            finalQuantScore: baseScore * smartMoneyMultiplier * oiMultiplier,
+            finalQuantScore: finalScore,
           });
         }
       }
@@ -334,10 +350,10 @@ async function runBacktest() {
     }
 
     // =========================================================
-    // TAHAP 4: ASYMMETRIC REBALANCING (WITH HYSTERESIS)
+    // TAHAP 4: ASYMMETRIC REBALANCING
     // =========================================================
     const totalCryptoBudget = currentPortfolioValue * targetExposure;
-    const rebalanceThreshold = currentPortfolioValue * 0.05; // 🛡️ HYSTERESIS 5%
+    const rebalanceThreshold = currentPortfolioValue * 0.05;
     let dayHasTrades = false;
 
     let targetValues = {};
@@ -458,7 +474,7 @@ async function runBacktest() {
     // =========================================================
     if (dayHasTrades) {
       console.log(`\n=========================================`);
-      console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE`);
+      console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE (V1)`);
       console.log(
         `📈 Market: ${regimeStatus} (${trendDirection}) | Mayer: ${mayer.toFixed(2)}x`,
       );
@@ -526,7 +542,7 @@ async function runBacktest() {
 
   // --- 4. PENYIMPANAN DATA (SYNC KE SUPABASE) - DINONAKTIFKAN ---
   console.log(
-    "\nℹ️ Info: Penulisan data hasil simulasi (V1) ke database Supabase telah dinonaktifkan secara aman.",
+    "\nℹ️ Info: Penulisan data hasil simulasi ke database Supabase telah dinonaktifkan secara aman.",
   );
 
   // --- KESIMPULAN AKHIR ---
@@ -539,7 +555,7 @@ async function runBacktest() {
   console.log(
     `\n╔════════════════════════════════════════════════════════════╗`,
   );
-  console.log(`║          🏆 HASIL AKHIR BACKTEST (QUANT GOLD)              ║`);
+  console.log(`║      🏆 HASIL AKHIR BACKTEST V1 (TANPA RANK BUFFER)        ║`);
   console.log(`╠════════════════════════════════════════════════════════════╣`);
   console.log(`   💰 Modal Awal          : $200.00                          `);
   console.log(

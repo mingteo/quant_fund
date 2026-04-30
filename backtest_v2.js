@@ -33,7 +33,7 @@ async function fetchAllSupabaseRows(table, select, eqObj, orderCol) {
   return allData;
 }
 
-// --- 1. FUNGSI MATEMATIKA (UTILITIES V2) ---
+// --- 1. FUNGSI MATEMATIKA (UTILITIES) ---
 function calculateEMA(prices, period) {
   if (prices.length < period) return prices[prices.length - 1] || 0;
   const k = 2 / (period + 1);
@@ -54,23 +54,11 @@ function calculateROC(prices, period) {
   return ((current - past) / past) * 100;
 }
 
-// 🌟 UPGRADE 1: HISTORICAL VOLATILITY
-function calculateVolatility(prices, period) {
-  if (prices.length < period) return 0.15;
-  const slice = prices.slice(-period);
-  const mean = slice.reduce((a, b) => a + b, 0) / period;
-  const variance =
-    slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / period;
-  const stdev = Math.sqrt(variance);
-  let volPct = stdev / mean;
-  if (volPct < 0.08) volPct = 0.08;
-  if (volPct > 0.25) volPct = 0.25;
-  return volPct;
-}
-
 // --- 2. ENGINE BACKTEST UTAMA ---
-async function runBacktestV2() {
-  console.log("🚀 MEMULAI BACKTEST: VERSI QUANT V2 (INSTITUTIONAL GRADE)...");
+async function runBacktest() {
+  console.log(
+    "🚀 MEMULAI BACKTEST V2: RANK BUFFER + SMART MONEY + BREAK-EVEN PROTOCOL...",
+  );
 
   const targetCoins = [
     "BTCUSDT",
@@ -114,7 +102,7 @@ async function runBacktestV2() {
     );
   }
 
-  // B. Ambil Data Makro & Derivatives
+  // B. Ambil Data Makro & Derivatives (TERMASUK FUNDING RATE)
   const dxyData = await fetchAllSupabaseRows(
     "macro_data",
     "timestamp, close",
@@ -157,8 +145,9 @@ async function runBacktestV2() {
 
   const { data: oiData } = await supabase
     .from("derivatives_data")
-    .select("symbol, open_interest, timestamp")
+    .select("symbol, open_interest, funding_rate, timestamp")
     .order("timestamp", { ascending: true });
+
   let derivativesTimeline = {};
   if (oiData) {
     oiData.forEach((row) => {
@@ -167,6 +156,7 @@ async function runBacktestV2() {
       derivativesTimeline[sym].push({
         dateOnly: new Date(row.timestamp).toISOString().split("T")[0],
         oi: parseFloat(row.open_interest),
+        fr: parseFloat(row.funding_rate || 0),
       });
     });
   }
@@ -185,7 +175,6 @@ async function runBacktestV2() {
   let peakValue = 200;
   let maxDrawdown = 0;
   let dailyRecords = [];
-  let tradeHistoryRecords = [];
   let totalTrades = 0;
 
   const startIdx = 200;
@@ -216,7 +205,6 @@ async function runBacktestV2() {
     const btcPrices = getPricesUpToToday("BTCUSDT");
     if (btcPrices.length < 200) continue;
     const currentBTCPrice = btcPrices[btcPrices.length - 1];
-    const btcRoc14 = calculateROC(btcPrices, 14);
 
     let currentCryptoValue = 0;
     for (const symbol of targetCoins) {
@@ -231,23 +219,25 @@ async function runBacktestV2() {
     const btcEma20 = calculateEMA(btcPrices.slice(-100), 20);
     const btcEma50 = calculateEMA(btcPrices.slice(-100), 50);
     const trendDirection = btcEma20 > btcEma50 ? "UPTREND" : "DOWNTREND";
+    const btcRoc14 = calculateROC(btcPrices, 14);
     const btcSma200 = calculateSMA(btcPrices, 200);
     const mayer = currentBTCPrice / btcSma200;
 
-    let targetExposure = 0,
-      regimeStatus = "";
+    let targetExposure = 0;
+    let regimeStatus = "";
+
     if (mayer < 0.75) {
       targetExposure = btcRoc14 > -15 ? 1.0 : 0.5;
-      regimeStatus = "ACCUMULATION (DEEP DISCOUNT)";
+      regimeStatus = "ACCUMULATION";
     } else if (mayer >= 0.75 && mayer < 1.2) {
       targetExposure = 0.8;
-      regimeStatus = "RECOVERY / FAIR VALUE";
+      regimeStatus = "FAIR VALUE";
     } else if (mayer >= 1.2 && mayer < 2.0) {
       targetExposure = 0.6;
-      regimeStatus = "MARKUP (BULLISH)";
+      regimeStatus = "MARKUP";
     } else {
       targetExposure = 0.2;
-      regimeStatus = "DISTRIBUTION (OVERVALUED)";
+      regimeStatus = "DISTRIBUTION";
     }
 
     const availableDXY = dxyTimeline
@@ -259,40 +249,12 @@ async function runBacktestV2() {
       const dxyRoc14 = calculateROC(availableDXY, 14);
       if (dxyEma20 > dxyEma50 && dxyRoc14 > 2 && btcRoc14 < -10) {
         targetExposure = 0.0;
-        regimeStatus = "CRITICAL MACRO RISK (100% CASH)";
+        regimeStatus = "MACRO RISK";
       }
     }
 
     // =========================================================
-    // TAHAP 2: THE PROFIT LOCKER (DYNAMIC TRAILING STOP V2)
-    // =========================================================
-    let emergencySells = [];
-    let actionLog = [];
-
-    for (const symbol of targetCoins) {
-      if (holdings[symbol] > 0) {
-        const prices = getPricesUpToToday(symbol);
-        const dynamicStopTolerance = calculateVolatility(prices, 14);
-        const currentPrice = marketData[symbol]?.get(todayStr);
-
-        if (currentPrice > athPrices[symbol]) athPrices[symbol] = currentPrice;
-
-        const dropFromAth =
-          (athPrices[symbol] - currentPrice) / athPrices[symbol];
-        if (dropFromAth >= dynamicStopTolerance) {
-          emergencySells.push(symbol);
-          actionLog.push(
-            `🚨 DYN-TS: ${symbol.replace("USDT", "")} (-${(dropFromAth * 100).toFixed(1)}%)`,
-          );
-          athPrices[symbol] = 0;
-        }
-      } else {
-        athPrices[symbol] = 0;
-      }
-    }
-
-    // =========================================================
-    // TAHAP 3: RANKING & RELATIVE STRENGTH V2
+    // TAHAP 2: RANKING MOMENTUM DENGAN OI, FR, DAN RANK BUFFER
     // =========================================================
     const getVolumesUpToToday = (symbol) => {
       let vols = [];
@@ -318,14 +280,7 @@ async function runBacktestV2() {
       const roc14 = calculateROC(prices, 14);
       const roc30 = calculateROC(prices, 30);
 
-      // 🌟 UPGRADE 2: RELATIVE STRENGTH
-      const relativeStrengthVsBtc = roc14 - btcRoc14;
-
-      if (
-        roc14 > 0 &&
-        (relativeStrengthVsBtc > 0 || symbol === "BTCUSDT") &&
-        distanceToSma50 < 40
-      ) {
+      if (roc14 > 0 && distanceToSma50 < 40) {
         const currentVol = vols[vols.length - 1];
         const avgVol20 = calculateSMA(vols.slice(-20), 20);
 
@@ -334,43 +289,93 @@ async function runBacktestV2() {
         else if (currentVol > avgVol20 * 1.5) smartMoneyMultiplier = 1.5;
 
         let oiMultiplier = 1.0;
-        const availableOI =
-          derivativesTimeline[symbol]
-            ?.filter((d) => d.dateOnly <= dateOnly)
-            .map((d) => d.oi) || [];
-        if (availableOI.length >= 5) {
-          const currentOI = availableOI[availableOI.length - 1];
-          const pastOI = availableOI[availableOI.length - 5];
-          const oiChange = ((currentOI - pastOI) / pastOI) * 100;
+        let frMultiplier = 1.0;
+        const availableDerivatives =
+          derivativesTimeline[symbol]?.filter((d) => d.dateOnly <= dateOnly) ||
+          [];
 
+        if (availableDerivatives.length >= 5) {
+          const currentDeriv =
+            availableDerivatives[availableDerivatives.length - 1];
+          const pastDeriv =
+            availableDerivatives[availableDerivatives.length - 5];
+
+          const oiChange =
+            ((currentDeriv.oi - pastDeriv.oi) / pastDeriv.oi) * 100;
           if (oiChange > 15 && distanceToSma50 < 20) oiMultiplier = 1.5;
           else if (oiChange < -10) oiMultiplier = 0.1;
+
+          if (currentDeriv.fr < -0.0005) frMultiplier = 1.2;
+          else if (currentDeriv.fr > 0.001) frMultiplier = 0.8;
         }
 
-        const baseScore =
-          roc14 * 0.5 + roc30 * 0.3 + relativeStrengthVsBtc * 0.2;
+        const baseScore = roc14 * 0.6 + roc30 * 0.4;
+
         if (baseScore > 0) {
+          let finalScore =
+            baseScore * smartMoneyMultiplier * oiMultiplier * frMultiplier;
+
+          // 🛡️ RANK BUFFER SYSTEM (THE INCUMBENT BONUS)
+          const currentHoldingValue = holdings[symbol] * currentP;
+          if (currentHoldingValue > 10) {
+            finalScore = finalScore * 1.15; // 15% Retention Hysteresis
+          }
+
           dailyMomentum.push({
             symbol,
-            finalQuantScore: baseScore * smartMoneyMultiplier * oiMultiplier,
+            finalQuantScore: finalScore,
           });
         }
       }
     }
 
     // =========================================================
-    // TAHAP 4: ASYMMETRIC REBALANCING (DYNAMIC HYSTERESIS)
+    // TAHAP 3: THE PROFIT LOCKER (TRAILING STOP & BREAK-EVEN)
+    // =========================================================
+    const trailingStopTolerance = 0.15;
+    const breakEvenActivation = 0.05; // 🛡️ Jaring aktif jika pernah profit 5%
+    let emergencySells = [];
+    let actionLog = [];
+
+    for (const symbol of targetCoins) {
+      if (holdings[symbol] > 0) {
+        const currentPrice = marketData[symbol]?.get(todayStr);
+        if (currentPrice > athPrices[symbol]) athPrices[symbol] = currentPrice;
+
+        const avgPrice = costBasis[symbol] / holdings[symbol];
+        const maxProfitReached = (athPrices[symbol] - avgPrice) / avgPrice;
+
+        // Titik eksekusi normal (15% dari pucuk ATH)
+        let stopPrice = athPrices[symbol] * (1 - trailingStopTolerance);
+
+        // LOGIKA BREAK-EVEN: LINDUNGI MODAL JIKA SUDAH PROFIT!
+        if (maxProfitReached >= breakEvenActivation) {
+          const breakEvenPrice = avgPrice * 1.005; // Harga modal + 0.5% (Buat bayar fee Bybit)
+
+          // Jika Trailing Stop (15% dari pucuk) ternyata berada DI BAWAH harga modal,
+          // maka kita paksa jaring pengaman naik ke titik impas (Break-Even)
+          if (breakEvenPrice > stopPrice) {
+            stopPrice = breakEvenPrice;
+          }
+        }
+
+        if (currentPrice <= stopPrice) {
+          emergencySells.push(symbol);
+          actionLog.push(`🛡️ PROTECT/TS: ${symbol.replace("USDT", "")}`);
+          athPrices[symbol] = 0;
+        }
+      } else {
+        athPrices[symbol] = 0;
+      }
+    }
+
+    // =========================================================
+    // TAHAP 4: ASYMMETRIC REBALANCING
     // =========================================================
     const totalCryptoBudget = currentPortfolioValue * targetExposure;
-
-    // 🌟 UPGRADE 3: DYNAMIC HYSTERESIS
-    const cashRatio = capitalUSDT / currentPortfolioValue;
-    let dynamicHysteresisPct = 0.05;
-    if (cashRatio > 0.5) dynamicHysteresisPct = 0.03;
-    else if (cashRatio < 0.2) dynamicHysteresisPct = 0.08;
-    const rebalanceThreshold = currentPortfolioValue * dynamicHysteresisPct;
-
+    const rebalanceThreshold = currentPortfolioValue * 0.05;
     let dayHasTrades = false;
+
     let targetValues = {};
     targetCoins.forEach((coin) => (targetValues[coin] = 0));
 
@@ -402,25 +407,31 @@ async function runBacktestV2() {
       const targetVal = targetValues[symbol];
       const diff = targetVal - currentVal;
 
-      if (diff < -rebalanceThreshold || (targetVal === 0 && currentVal > 10)) {
+      if (
+        diff < -rebalanceThreshold ||
+        (targetVal === 0 && currentVal > 10) ||
+        emergencySells.includes(symbol)
+      ) {
         const sellQty = Math.min(
           Math.abs(diff) / currentPrice,
           holdings[symbol],
         );
 
-        if (sellQty > 0) {
-          let avgPrice =
-            holdings[symbol] > 0 ? costBasis[symbol] / holdings[symbol] : 0;
-          let sellDate = new Date(todayStr);
-          sellDate.setUTCHours(10, 0, 0, 0);
+        // Paksa jual 100% jika kena jaring Break-Even / TS
+        const finalSellQty = emergencySells.includes(symbol)
+          ? holdings[symbol]
+          : sellQty;
 
-          const ratio = sellQty / holdings[symbol];
+        if (finalSellQty > 0) {
+          const ratio = finalSellQty / holdings[symbol];
           costBasis[symbol] -= costBasis[symbol] * ratio;
-          capitalUSDT += sellQty * currentPrice;
-          holdings[symbol] -= sellQty;
+          capitalUSDT += finalSellQty * currentPrice;
+          holdings[symbol] -= finalSellQty;
 
-          actionLog.push(`-${symbol.replace("USDT", "")}`);
+          if (!emergencySells.includes(symbol))
+            actionLog.push(`-${symbol.replace("USDT", "")}`);
           dayHasTrades = true;
+          totalTrades++;
         }
       }
     }
@@ -434,13 +445,11 @@ async function runBacktestV2() {
       const targetVal = targetValues[symbol];
       const diff = targetVal - currentVal;
 
-      if (diff > rebalanceThreshold) {
+      if (diff > rebalanceThreshold && !emergencySells.includes(symbol)) {
         const buyAmount = Math.min(diff, capitalUSDT);
 
         if (buyAmount > 10) {
           const buyQty = buyAmount / currentPrice;
-          let buyDate = new Date(todayStr);
-          buyDate.setUTCHours(10, 20, 0, 0);
 
           capitalUSDT -= buyAmount;
           holdings[symbol] += buyQty;
@@ -458,7 +467,7 @@ async function runBacktestV2() {
     // =========================================================
     if (dayHasTrades) {
       console.log(`\n=========================================`);
-      console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE`);
+      console.log(`🗓️  [${dateOnly}] ORACLE PORTFOLIO UPDATE (V2)`);
       console.log(
         `📈 Market: ${regimeStatus} (${trendDirection}) | Mayer: ${mayer.toFixed(2)}x`,
       );
@@ -496,7 +505,7 @@ async function runBacktestV2() {
     }
 
     // =========================================================
-    // TAHAP 6: RECORDING
+    // TAHAP 6: RECORDING STATISTIK
     // =========================================================
     if (currentPortfolioValue > peakValue) peakValue = currentPortfolioValue;
     const currentDD = ((peakValue - currentPortfolioValue) / peakValue) * 100;
@@ -518,32 +527,27 @@ async function runBacktestV2() {
         ((currentSPXPrice - startSPXPrice) / startSPXPrice) *
         100
       ).toFixed(2),
-      max_drawdown: maxDrawdown.toFixed(2),
     });
   }
 
-  // --- 4. KESIMPULAN AKHIR (TANPA MENIMPA SUPABASE) ---
+  // --- KESIMPULAN AKHIR ---
   const lastRecord = dailyRecords[dailyRecords.length - 1];
-  const finalValue = parseFloat(lastRecord.total_value);
-  const totalROI = parseFloat(lastRecord.system_roi);
-  const finalBTCROI = parseFloat(lastRecord.btc_roi);
-  const finalSPXROI = parseFloat(lastRecord.spx_roi);
 
   console.log(
     `\n╔════════════════════════════════════════════════════════════╗`,
   );
-  console.log(`║          🏆 HASIL AKHIR BACKTEST (QUANT V2)                ║`);
+  console.log(`║ 🏆 HASIL AKHIR BACKTEST V2 (RANK BUFFER + BREAK-EVEN)      ║`);
   console.log(`╠════════════════════════════════════════════════════════════╣`);
   console.log(`   💰 Modal Awal          : $200.00                          `);
   console.log(
-    `   💵 Nilai Akhir         : $${finalValue.toFixed(2).padStart(12)}               `,
+    `   💵 Nilai Akhir         : $${parseFloat(lastRecord.total_value).toFixed(2).padStart(12)}               `,
   );
   console.log(
     `   🚀 Total Trades        : ${totalTrades.toString().padStart(12)} trades             `,
   );
   console.log(`╠════════════════════════════════════════════════════════════╣`);
   console.log(
-    `   📈 Return Sistem (ROI) : ${totalROI.toFixed(2).padStart(12)}%                `,
+    `   📈 Return Sistem (ROI) : ${parseFloat(lastRecord.system_roi).toFixed(2).padStart(12)}%                `,
   );
   console.log(
     `   📉 Max Drawdown        : -${maxDrawdown.toFixed(2).padStart(11)}%                `,
@@ -551,18 +555,14 @@ async function runBacktestV2() {
   console.log(`╠════════════════════════════════════════════════════════════╣`);
   console.log(`║  📊 BENCHMARK COMPARISON:                                  ║`);
   console.log(
-    `   🔸 Bitcoin Buy & Hold  : ${finalBTCROI.toFixed(2).padStart(12)}%                 `,
+    `   🔸 Bitcoin Buy & Hold  : ${parseFloat(lastRecord.btc_roi).toFixed(2).padStart(12)}%                 `,
   );
   console.log(
-    `   🔹 S&P 500 (Stock)     : ${finalSPXROI.toFixed(2).padStart(12)}%                 `,
+    `   🔹 S&P 500 (Stock)     : ${parseFloat(lastRecord.spx_roi).toFixed(2).padStart(12)}%                 `,
   );
   console.log(
     `╚════════════════════════════════════════════════════════════╝\n`,
   );
-
-  console.log(
-    "ℹ️ Info: Penulisan data hasil simulasi ke database Supabase telah dinonaktifkan untuk melindungi data V1 Anda.",
-  );
 }
 
-runBacktestV2();
+runBacktest();
