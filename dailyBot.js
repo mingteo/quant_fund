@@ -29,7 +29,6 @@ const targetCoins = [
   "AVAXUSDT",
   "LINKUSDT",
   "HYPEUSDT",
-  "ZECUSDT",
   "PAXGUSDT",
 ];
 

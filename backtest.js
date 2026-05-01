@@ -61,16 +61,15 @@ async function runBacktest() {
   const targetCoins = [
     "BTCUSDT",
     "ETHUSDT",
+    "PAXGUSDT",
+    "HYPEUSDT",
     "SOLUSDT",
-    "SUIUSDT",
+    "DOGEUSDT",
     "BNBUSDT",
     "XRPUSDT",
-    "DOGEUSDT",
-    "AVAXUSDT",
     "LINKUSDT",
-    "HYPEUSDT",
-    "ZECUSDT",
-    "PAXGUSDT",
+    "SUIUSDT",
+    "AVAXUSDT",
   ];
 
   // A. Ambil Data Assets & Market
