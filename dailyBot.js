@@ -100,7 +100,12 @@ async function sendTelegram(text) {
   });
 }
 
-async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
+async function broadcastUpdate(
+  regimeStatus,
+  totalEquity,
+  newCapitalUSDT,
+  actionLog,
+) {
   const { data: history } = await supabase
     .from("portfolio_history")
     .select("*")
@@ -145,6 +150,16 @@ async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
   message += `• Total Capital: *$${totalEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })}*\n`;
   message += `• System ROI : *${last.system_roi}%*\n`;
   message += `• Max Drawdown: \`${last.max_drawdown}%\`\n\n`;
+
+  // ---> SISIPKAN BLOK TODAY'S ACTIONS DI SINI <---
+  message += `⚡ *TODAY'S ACTIONS*\n`;
+  if (actionLog && actionLog.length > 0) {
+    message += actionLog.join("\n") + "\n\n";
+  } else {
+    message += `_No change in positions !_ 💤\n\n`;
+  }
+  // ------------------------------------------------
+
   message += `📊 *ACTIVE ALLOCATIONS*\n`;
   if (hasCrypto) message += activePositionsText;
   else message += `⚠️ _100% CASH MODE ACTIVE (Awaiting Macro Clear)_\n`;
@@ -156,7 +171,7 @@ async function broadcastUpdate(regimeStatus, totalEquity, newCapitalUSDT) {
   const alpha = parseFloat(last.system_roi) - parseFloat(last.btc_roi);
   const status =
     alpha > 0
-      ? `✅ UPPERFORMING BTC ROI BY +${alpha.toFixed(2)}%`
+      ? `✅ OUTPERFORMING BTC ROI BY +${alpha.toFixed(2)}%`
       : `⚠️ UNDERPERFORMING BTC ROI BY ${Math.abs(alpha).toFixed(2)}%`;
   message += `*STATUS:* ${status}\n\n`;
   message += `🔗 [Dashboard Link](https://oracle-quant.vercel.app/)`;
@@ -205,6 +220,8 @@ async function executeLiveRebalancing(
   let newHoldings = { ...currentHoldings };
   let newCostBasis = { ...costBasis };
 
+  let actionLog = [];
+
   // --- FASE 1: EKSEKUSI SELL ---
   for (const symbol of Object.keys(targetValues)) {
     const currentPrice = marketPrices[symbol];
@@ -239,6 +256,15 @@ async function executeLiveRebalancing(
             qty: sellQty.toString(),
           });
           if (response.retCode !== 0) throw new Error(response.retMsg);
+
+          // Hitung porsi persentase dari aksi SELL ini terhadap total portofolio
+          const sellValueUSDT = parseFloat(sellQty) * currentPrice;
+          const sellPct = (sellValueUSDT / totalEquity) * 100;
+
+          // Catat log dengan format detail: Nama | Koin (Porsi%) | Harga
+          actionLog.push(
+            `🔴 *SELL* ${symbol.replace("USDT", "")} | ${parseFloat(sellQty)} coin (${sellPct.toFixed(2)}%) | Price: $${currentPrice}`,
+          );
 
           let avgPrice = 0,
             pnl_percent = 0;
@@ -306,6 +332,14 @@ async function executeLiveRebalancing(
             // slOrderType: "Market",
           });
           if (response.retCode !== 0) throw new Error(response.retMsg);
+
+          // Hitung porsi persentase dari aksi BUY ini terhadap total portofolio
+          const buyPct = (parseFloat(buyQtyUSDT) / totalEquity) * 100;
+
+          // Catat log dengan format detail: Nama | Koin (Porsi%) | Harga
+          actionLog.push(
+            `🟢 *BUY* ${symbol.replace("USDT", "")} | ${estimatedKoinDidapat.toFixed(4)} coin (${buyPct.toFixed(2)}%) | Price: $${currentPrice}`,
+          );
 
           // Hitung estimasi koin untuk dicatat di database Supabase kita
           const estimatedKoinDidapat = parseFloat(buyQtyUSDT) / currentPrice;
@@ -613,7 +647,7 @@ async function runDailyOracle() {
       });
     }
 
-    const { newHoldings, newCapitalUSDT, newCostBasis } =
+    const { newHoldings, newCapitalUSDT, newCostBasis, actionLog } =
       await executeLiveRebalancing(
         targetValues,
         currentHoldings,
@@ -736,7 +770,12 @@ async function runDailyOracle() {
     await supabase.from("current_positions").insert(finalPositions);
 
     // --- 6. TELEGRAM ---
-    await broadcastUpdate(regimeStatus, finalTotalEquity, finalCapitalUSDT);
+    await broadcastUpdate(
+      regimeStatus,
+      finalTotalEquity,
+      finalCapitalUSDT,
+      actionLog,
+    );
   } catch (error) {
     console.error("❌ ERROR:", error);
     await sendTelegram(
