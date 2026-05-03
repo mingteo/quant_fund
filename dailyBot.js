@@ -174,7 +174,7 @@ async function broadcastUpdate(
       ? `✅ OUTPERFORMING BTC ROI BY +${alpha.toFixed(2)}%`
       : `⚠️ UNDERPERFORMING BTC ROI BY ${Math.abs(alpha).toFixed(2)}%`;
   message += `*STATUS:* ${status}\n\n`;
-  message += `🔗 [Dashboard Link](https://oracle-quant.vercel.app/)`;
+  message += `🔗 [Dashboard Link](https://systeming-quant.vercel.app/)`;
 
   await sendTelegram(message);
 }
@@ -333,17 +333,15 @@ async function executeLiveRebalancing(
           });
           if (response.retCode !== 0) throw new Error(response.retMsg);
 
-          // Hitung porsi persentase dari aksi BUY ini terhadap total portofolio
-          const buyPct = (parseFloat(buyQtyUSDT) / totalEquity) * 100;
+          // 👇 1. BUAT VARIABELNYA TERLEBIH DAHULU 👇
+          const estimatedKoinDidapat = parseFloat(buyQtyUSDT) / currentPrice;
+          const delayMs = isSellExecuted ? 1500 : 0;
 
-          // Catat log dengan format detail: Nama | Koin (Porsi%) | Harga
+          // 👇 2. BARU MASUKKAN KE LOG TELEGRAM 👇
+          const buyPct = (parseFloat(buyQtyUSDT) / totalEquity) * 100;
           actionLog.push(
             `🟢 *BUY* ${symbol.replace("USDT", "")} | ${estimatedKoinDidapat.toFixed(4)} coin (${buyPct.toFixed(2)}%) | Price: $${currentPrice}`,
           );
-
-          // Hitung estimasi koin untuk dicatat di database Supabase kita
-          const estimatedKoinDidapat = parseFloat(buyQtyUSDT) / currentPrice;
-          const delayMs = isSellExecuted ? 1500 : 0;
 
           await recordTrade(
             symbol,
@@ -365,7 +363,7 @@ async function executeLiveRebalancing(
       }
     }
   }
-  return { newHoldings, newCapitalUSDT, newCostBasis };
+  return { newHoldings, newCapitalUSDT, newCostBasis, actionLog };
 }
 
 // ====================================================================
