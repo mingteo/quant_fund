@@ -140,7 +140,7 @@ async function broadcastUpdate(
   const filledBoxes = Math.round(cryptoExposurePct / 10);
   const exposureBar = "🟩".repeat(filledBoxes) + "⬜".repeat(10 - filledBoxes);
 
-  let message = `🏛 *QUANT ORACLE TERMINAL*\n`;
+  let message = `🏛 *SYSTEMING QUANT TERMINAL*\n`;
   message += `_Daily Execution: ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB_\n\n`;
   message += `🌐 *MACRO REGIME*\nStatus: _${regimeStatus}_\n\n`;
   message += `🛡️ *SYSTEM EXPOSURE*\n[${exposureBar}] *${cryptoExposurePct}%*\n`;
@@ -212,7 +212,7 @@ async function executeLiveRebalancing(
   costBasis,
   totalEquity,
 ) {
-  console.log("\n🤖 MEMULAI ORACLE LIVE REBALANCING (BYBIT V5 API)...");
+  console.log("\n🤖 MEMULAI QUANT LIVE REBALANCING (BYBIT V5 API)...");
   const serverTimeMs = Date.now();
   const rebalanceThreshold = totalEquity * 0.05;
   let isSellExecuted = false;
@@ -411,8 +411,8 @@ async function syncRealBybitBalances() {
 // ====================================================================
 // 4. MAIN ORCHESTRATOR (THE QUANT BRAIN)
 // ====================================================================
-async function runDailyOracle() {
-  console.log("🚀 MENGAKTIFKAN QUANT ORACLE (BYBIT V5 LIVE)...");
+async function runDailyQuant() {
+  console.log("🚀 MENGAKTIFKAN SYSTEMING QUANT (BYBIT V5 LIVE)...");
 
   // --- 0. DATA PIPELINE TRIGGER (AUTO-FETCH) ---
   console.log("🔄 Memperbarui database market_data...");
@@ -429,7 +429,7 @@ async function runDailyOracle() {
     console.log(
       "✅ Semua database (Market, Macro, Derivatives) berhasil diperbarui!",
     );
-    console.log("🧠 Memulai kalkulasi otak Oracle...");
+    console.log("🧠 Memulai kalkulasi otak kuantitatif...");
   } catch (error) {
     console.error("❌ Terjadi kegagalan pada Data Pipeline:", error.message);
     console.log(
@@ -777,9 +777,9 @@ async function runDailyOracle() {
   } catch (error) {
     console.error("❌ ERROR:", error);
     await sendTelegram(
-      `🚨 *SYSTEM ALERT*\nError saat menjalankan Daily Oracle:\n\`${error.message}\``,
+      `🚨 *SYSTEM ALERT*\nError saat menjalankan Daily Quant:\n\`${error.message}\``,
     );
   }
 }
 
-runDailyOracle();
+runDailyQuant();
