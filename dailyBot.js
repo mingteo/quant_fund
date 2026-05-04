@@ -214,7 +214,7 @@ async function executeLiveRebalancing(
 ) {
   console.log("\n🤖 MEMULAI QUANT LIVE REBALANCING (BYBIT V5 API)...");
   const serverTimeMs = Date.now();
-  const rebalanceThreshold = totalEquity * 0.05;
+  const rebalanceThreshold = totalEquity * 0.08;
   let isSellExecuted = false;
   let newCapitalUSDT = capitalUSDT;
   let newHoldings = { ...currentHoldings };

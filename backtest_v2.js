@@ -71,7 +71,6 @@ async function runBacktest() {
     "AVAXUSDT",
     "LINKUSDT",
     "HYPEUSDT",
-    "ZECUSDT",
     "PAXGUSDT",
   ];
 
@@ -280,7 +279,19 @@ async function runBacktest() {
       const roc14 = calculateROC(prices, 14);
       const roc30 = calculateROC(prices, 30);
 
-      if (roc14 > 0 && distanceToSma50 < 40) {
+      const relativeStrengthVsBtc = roc14 - btcRoc14;
+
+      // 🛡️ CEK STATUS PETAHANA
+      const currentHoldingValue = holdings[symbol] * currentP;
+      const isIncumbent = currentHoldingValue > 10;
+
+      // 💡 PERBAIKAN KUNCI: Koin petahana bebas dari syarat "wajib mengalahkan BTC harian"
+      // Mereka tetap dinilai, tapi tidak akan ditendang keluar secara prematur
+      if (
+        roc14 > 0 &&
+        (relativeStrengthVsBtc > 0 || symbol === "BTCUSDT" || isIncumbent) &&
+        distanceToSma50 < 40
+      ) {
         const currentVol = vols[vols.length - 1];
         const avgVol20 = calculateSMA(vols.slice(-20), 20);
 
@@ -309,16 +320,17 @@ async function runBacktest() {
           else if (currentDeriv.fr > 0.001) frMultiplier = 0.8;
         }
 
-        const baseScore = roc14 * 0.6 + roc30 * 0.4;
+        // Kalkulasi Base Score
+        const baseScore =
+          roc14 * 0.5 + roc30 * 0.3 + relativeStrengthVsBtc * 0.2;
 
         if (baseScore > 0) {
           let finalScore =
             baseScore * smartMoneyMultiplier * oiMultiplier * frMultiplier;
 
-          // 🛡️ RANK BUFFER SYSTEM (THE INCUMBENT BONUS)
-          const currentHoldingValue = holdings[symbol] * currentP;
-          if (currentHoldingValue > 10) {
-            finalScore = finalScore * 1.15; // 15% Retention Hysteresis
+          // 🛡️ RANK BUFFER 15% DITERAPKAN DI SINI
+          if (isIncumbent) {
+            finalScore = finalScore * 1.15;
           }
 
           dailyMomentum.push({
@@ -370,10 +382,10 @@ async function runBacktest() {
     }
 
     // =========================================================
-    // TAHAP 4: ASYMMETRIC REBALANCING
+    // TAHAP 4: ASYMMETRIC REBALANCING (EQUAL WEIGHT PROTOCOL)
     // =========================================================
     const totalCryptoBudget = currentPortfolioValue * targetExposure;
-    const rebalanceThreshold = currentPortfolioValue * 0.05;
+    const rebalanceThreshold = currentPortfolioValue * 0.05; // Toleransi 5% guncangan
     let dayHasTrades = false;
 
     let targetValues = {};
@@ -385,15 +397,14 @@ async function runBacktest() {
         (item) => !emergencySells.includes(item.symbol),
       );
       const topPicks = safePicks.slice(0, 3);
-      const totalScore = topPicks.reduce(
-        (sum, item) => sum + item.finalQuantScore,
-        0,
-      );
 
-      if (totalScore > 0) {
+      // 💡 PERBAIKAN KUNCI: Porsi Rata (Equal Weight)
+      if (topPicks.length > 0) {
+        // Jika Top 3, masing-masing koin dapat tepat 33.33% dari budget
+        const budgetPerCoin = totalCryptoBudget / topPicks.length;
+
         topPicks.forEach((pick) => {
-          targetValues[pick.symbol] =
-            totalCryptoBudget * (pick.finalQuantScore / totalScore);
+          targetValues[pick.symbol] = budgetPerCoin;
         });
       }
     }

@@ -18,7 +18,6 @@ const targetCoins = [
   "AVAXUSDT",
   "LINKUSDT",
   "HYPEUSDT",
-  "ZECUSDT",
   "PAXGUSDT",
 ];
 
@@ -254,11 +253,27 @@ async function runStagingOracle() {
 
         const baseScore =
           roc14 * 0.5 + roc30 * 0.3 + relativeStrengthVsBtc * 0.2;
+
         if (baseScore > 0) {
+          // 🛡️ THE INCUMBENT ADVANTAGE (SABUK PENGAMAN 15%)
+          let incumbentMultiplier = 1.0;
+          const currentVal = (currentHoldings[symbol] || 0) * currentP;
+
+          // Hanya berikan bonus 15% jika kita sedang memegang koin ini (bukan sekadar debu koin < $10)
+          if (currentVal > 10) {
+            incumbentMultiplier = 1.15;
+          }
+
           dailyMomentum.push({
             symbol,
-            finalQuantScore: baseScore * smartMoneyMultiplier * oiMultiplier,
+            // Kalikan semua multiplier, termasuk bonus petahana
+            finalQuantScore:
+              baseScore *
+              smartMoneyMultiplier *
+              oiMultiplier *
+              incumbentMultiplier,
             rsBtc: relativeStrengthVsBtc,
+            isIncumbent: incumbentMultiplier > 1.0, // Tandai untuk log terminal
           });
         }
       }
@@ -303,9 +318,13 @@ async function runStagingOracle() {
     console.log(`🏆 TOP 3 KOIN (Relative Strength > BTC)`);
     if (topPicks.length === 0)
       console.log("⚠️ Tidak ada koin yang memenuhi syarat. 100% Cash.");
+
     topPicks.forEach((p, idx) => {
+      // Munculkan ikon tameng jika koin ini mendapatkan bonus Petahana
+      const petahanaStatus = p.isIncumbent ? "🛡️ [INCUMBENT +15%]" : "";
+
       console.log(
-        `${idx + 1}. ${p.symbol} | Score: ${p.finalQuantScore.toFixed(2)} | RS vs BTC: +${p.rsBtc.toFixed(2)}% | Target: $${targetValues[p.symbol].toFixed(2)}`,
+        `${idx + 1}. ${p.symbol} | Score: ${p.finalQuantScore.toFixed(2)} ${petahanaStatus} | RS vs BTC: +${p.rsBtc.toFixed(2)}% | Target: $${targetValues[p.symbol].toFixed(2)}`,
       );
     });
     console.log("-------------------------------------------------");
